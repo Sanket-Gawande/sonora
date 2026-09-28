@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+build/
+bin/
+obj/
+work/
+.gradle/
+.idea/
+local.properties
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
