@@ -32,6 +32,7 @@ WPF on .NET Framework 4.8, built with the C# compiler that ships with Windows, s
 - `src/AudioMeter.cs`: the real peak level of the default output device, which drives the waveform.
 - `src/Ui.cs`, `Styles.xaml`: tokens and controls from the canvas design (Mona Sans, a periwinkle accent, and a background toned from the wallpaper).
 - `src/OutsideClicks.cs`: tells the open notch about clicks elsewhere, so it closes like a menu.
+- `src/Launcher.cs`: the Start menu entry, created on first run and pointed at whichever copy ran last.
 - `src/Tray.cs`, `src/Preferences.cs`, `src/Native.cs`, `src/Verifier.cs`.
 
 ## Behaviour
@@ -40,6 +41,7 @@ WPF on .NET Framework 4.8, built with the C# compiler that ships with Windows, s
 - Clicking never takes focus from the app you are in. The hotkey does, and gives it back on close.
 - An open notch closes when you click anywhere else, like a menu (a mouse hook that exists only while it's open, on its own thread), or 2.5 s after the pointer leaves, except while pairing.
 - It slides away when a fullscreen app covers its own display, and returns afterwards. The hotkey, the tray icon or a second launch still opens it over a fullscreen app; it slides away again when closed.
+- Sonora puts itself in the Start menu (per user, no installer), so after a restart it's one search away. Start with Windows is off until you turn it on in settings; either entry follows the folder if you move it or unzip a newer release.
 - Preferences: `%LOCALAPPDATA%\Sonora\preferences.xml`. Errors: `%LOCALAPPDATA%\Sonora\error.log`.
 
 ## Audio

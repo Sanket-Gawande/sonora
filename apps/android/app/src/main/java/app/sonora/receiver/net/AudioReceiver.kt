@@ -42,8 +42,6 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
     // The output picked in the player (null: Android decides), and the one Android really plays on.
     @Volatile var preferred: AudioDeviceInfo? = null
     @Volatile var routed: AudioDeviceInfo? = null; private set
-    // Peak of the most recent packet, 0..1, for the player's waveform.
-    @Volatile var level = 0f; private set
     // When this phone's speaker plays a recent packet: its first frame on the stream's timeline
     // (sequence × 240, the PC's own count) and the time, System.nanoTime in µs. From the track's
     // own presentation timestamps, twice a second. Null until the track reports one.
@@ -67,7 +65,6 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
         if (result != PacketCodec.Result.Ok || packet == null) { rejected++; return }
         received++
         if (!packet.silence) audible++
-        level = if (packet.silence) 0f else peak(packet.pcm)
         jitter.push(packet.sequence, packet.pcm)
     }
 
@@ -179,16 +176,5 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
         const val PACKET_MS = 5
         const val PACKET_FRAMES = SAMPLE_RATE / 1000 * PACKET_MS
         const val PACKET_BYTES = SAMPLE_RATE / 1000 * PACKET_MS * 2 * 2
-
-        private fun peak(pcm: ByteArray): Float {
-            var max = 0
-            var i = 0
-            while (i + 1 < pcm.size) {
-                val v = kotlin.math.abs((pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8))
-                if (v > max) max = v
-                i += 8 // every other stereo frame is plenty for a meter
-            }
-            return max / 32768f
-        }
     }
 }

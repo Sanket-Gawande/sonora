@@ -31,6 +31,7 @@ namespace Sonora {
    report.AppendLine("PASS font: Mona Sans Regular, Medium and SemiBold resolve from the bundled files");
 
    CheckSurfaces(report);
+   CheckLauncher(report);
 
    Expect(notch.View == NotchView.Idle, "starts idle");
    Snap(notch, directory, "01-idle");
@@ -127,6 +128,24 @@ namespace Sonora {
    Expect(warmInk.R > warmInk.B, "warm wallpaper gives a warm background");
    Ui.ApplySurface(null);
    report.AppendLine("PASS wallpaper surface: warm " + warmInk + ", opaque, text ≥ 12:1, faint text ≥ 4.5:1, grey falls back");
+  }
+
+  // The Start menu entry, written to a scratch folder: created once, left alone while it's right,
+  // and pointed at a moved copy.
+  static void CheckLauncher(StringBuilder report) {
+   string folder = Path.Combine(Path.GetTempPath(), "sonora-launcher-" + Guid.NewGuid().ToString("N"));
+   string link = Path.Combine(folder, "Sonora.lnk");
+   string exe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+   string moved = Path.Combine(folder, "Moved", "Sonora.exe");
+   try {
+    Expect(Launcher.Install(link, exe), "a missing launcher is created");
+    Expect(string.Equals(Launcher.TargetOf(link), exe, StringComparison.OrdinalIgnoreCase), "the launcher opens this Sonora.exe");
+    Expect(!Launcher.Install(link, exe), "a correct launcher is left alone");
+    Expect(Launcher.Install(link, moved) && string.Equals(Launcher.TargetOf(link), moved, StringComparison.OrdinalIgnoreCase), "a moved copy takes the launcher over");
+   } finally {
+    try { Directory.Delete(folder, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+   }
+   report.AppendLine("PASS launcher: Start menu entry created, kept, and repointed at a moved copy");
   }
 
   static Color? Dominant(Drawing.Color top, Drawing.Color bottom, double topShare) {

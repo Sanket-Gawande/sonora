@@ -58,7 +58,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -76,8 +75,8 @@ import app.sonora.receiver.net.Presence
 import kotlinx.coroutines.delay
 
 // The player, arranged like YouTube Music's: the cover under the header, the track under the cover,
-// then space, then the seek bar, one row of controls and the stream's live waveform along the
-// bottom, all on the cover's own colour (which the status bar shows too). Every row has a fixed height and the
+// then space, then the seek bar, one row of controls and the source along the bottom, all on the
+// cover's own colour (which the status bar shows too). Every row has a fixed height and the
 // cover is sized from what's left, so nothing moves while a track loads. Volume is the phone's own
 // buttons: the stream always plays at full level.
 @Composable
@@ -135,7 +134,7 @@ fun PlayerScreen(receiver: ReceiverModel) {
                     disconnect = { receiver.disconnect(context) },
                 )
                 Spacer(Modifier.height(14.dp))
-                Waveform(Modifier.fillMaxWidth().height(40.dp))
+                Source(media, computer)
             }
         }
     }
@@ -173,11 +172,11 @@ private fun TopBar(computer: String, latency: Int?, close: () -> Unit) {
 private val SIDE_SLOT = 100.dp
 
 // Everything in the column but the cover: header 56, the least spaces 12 + 16, gap 24, track 58,
-// seek 44, gap 8, controls 76, gap 14, waveform 40.
+// seek 44, gap 8, controls 76, gap 14, source 40.
 private val FIXED_ROWS = 348.dp
 
-// Title and "artist · app", left-aligned, one line each and always there: a long title scrolls
-// instead of wrapping, and a line never appears or disappears as a track loads.
+// Title and artist, left-aligned, one line each and always there: a long title scrolls instead of
+// wrapping, and a line never appears or disappears as a track loads.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TrackText(media: Presence.Media?, computer: String) {
@@ -187,7 +186,7 @@ private fun TrackText(media: Presence.Media?, computer: String) {
         else -> media.title
     }
     val detail = if (media == null) "Playing from $computer"
-    else listOf(media.artist, media.app).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { " " }
+    else media.artist.ifBlank { " " }
     Column(Modifier.fillMaxWidth().heightIn(min = 58.dp)) {
         Text(
             title,
@@ -343,47 +342,21 @@ private fun PlainButton(icon: ImageVector, label: String, enabled: Boolean, onCl
     ) { Glyph(icon, 30.dp, if (enabled) Sonora.Text else Sonora.Text3) }
 }
 
-// The stream's live level across the bottom: the newest peak in the middle, older ones rippling
-// out to the edges, a flat line in silence (a paused PC, or a quiet passage). Read only while
-// drawing, so its 20 frames a second redraw these bars and nothing else.
+// Where the sound comes from, under the controls: the PC app that's playing, or the PC itself
+// when Windows reports nothing. A fixed-height row, so the layout above never moves.
 @Composable
-private fun Waveform(modifier: Modifier) {
-    val levels = remember { FloatArray(WAVE_HISTORY) }
-    var frame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            val level = ReceiverService.current?.level ?: 0f
-            // Rise at once, fall gently, so the bars breathe rather than flicker.
-            val eased = maxOf(level, levels[0] * 0.82f)
-            for (i in WAVE_HISTORY - 1 downTo 1) levels[i] = levels[i - 1]
-            levels[0] = eased
-            frame++
-            delay(50)
-        }
-    }
-    Canvas(modifier.clearAndSetSemantics {}) {
-        frame // redraw on every frame
-        val pitch = 6.dp.toPx()
-        val bar = 3.dp.toPx()
-        val count = (size.width / pitch).toInt().coerceAtLeast(1)
-        val left = (size.width - (count - 1) * pitch - bar) / 2
-        val centre = (count - 1) / 2f
-        for (i in 0 until count) {
-            val distance = kotlin.math.abs(i - centre) / centre.coerceAtLeast(1f)
-            val level = levels[(distance * (WAVE_HISTORY - 1)).toInt()]
-            // Louder in the middle, tapering to the edges; never less than a dot.
-            val h = maxOf(bar, size.height * kotlin.math.sqrt(level.coerceIn(0f, 1f)) * (1f - 0.55f * distance))
-            drawRoundRect(
-                Color.White.copy(alpha = 0.42f),
-                topLeft = Offset(left + i * pitch, (size.height - h) / 2),
-                size = Size(bar, h),
-                cornerRadius = CornerRadius(bar / 2),
-            )
-        }
+private fun Source(media: Presence.Media?, computer: String) {
+    val source = media?.app?.takeIf { it.isNotBlank() } ?: computer
+    Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+        Text(
+            source.uppercase(),
+            style = text(12, FontWeight.SemiBold, Sonora.Text2, 0.12f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.semantics { contentDescription = "Playing from $source" },
+        )
     }
 }
-
-private const val WAVE_HISTORY = 24
 
 // The measured latency, coloured: a solid dark pill so it reads on any cover colour.
 @Composable

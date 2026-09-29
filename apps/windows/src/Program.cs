@@ -65,6 +65,9 @@ namespace Sonora {
      if (verify) return Verifier.Run(notch, session, media, prefs, args.Length > 1 ? args[1] : Environment.CurrentDirectory);
      media.Start();
      session.Watch();
+     // Sonora in the Start menu, pointing at this copy; and "Start with Windows", if on, too.
+     try { Launcher.Install(); Startup.Refresh(); }
+     catch (Exception error) { Log(error); }
      // The streaming phone sees what's playing and controls it (docs/protocol.md).
      media.Changed += delegate { session.PublishMedia(media.Current); };
      session.PublishMedia(media.Current);

@@ -51,9 +51,22 @@ namespace Sonora {
 
   public static void SetEnabled(bool enabled) {
    using (var key = Registry.CurrentUser.CreateSubKey(RunKey)) {
-    if (enabled) key.SetValue(ValueName, "\"" + System.Reflection.Assembly.GetExecutingAssembly().Location + "\" --background");
+    if (enabled) key.SetValue(ValueName, Command);
     else key.DeleteValue(ValueName, false);
    }
+  }
+
+  // Keeps an existing entry pointing at this copy, so a moved folder or a newer release still starts.
+  public static void Refresh() {
+   using (var key = Registry.CurrentUser.OpenSubKey(RunKey, true)) {
+    if (key == null) return;
+    var current = key.GetValue(ValueName) as string;
+    if (current != null && current != Command) key.SetValue(ValueName, Command);
+   }
+  }
+
+  static string Command {
+   get { return "\"" + System.Reflection.Assembly.GetExecutingAssembly().Location + "\" --background"; }
   }
  }
 }
