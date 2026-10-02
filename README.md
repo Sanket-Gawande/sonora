@@ -18,9 +18,9 @@ with the song, cover art and controls on both screens.
 
 <br>
 
-<img src="docs/screenshots/windows-desktop-open.jpg" width="100%" alt="A Windows desktop with the Sonora notch open at the top edge: the playing track with its controls, and a phone streaming over USB">
+<img src="docs/screenshots/windows-desktop-open.jpg" width="100%" alt="A Windows desktop with the Sonora notch open at the top edge: the playing track with its controls, this PC's volume, and a phone streaming over Wi-Fi">
 
-<sub>The notch on Windows, open: what's playing, and the phone it's streaming to.</sub>
+<sub>The notch on Windows, open: what's playing, the PC's volume, and the phone it's streaming to.</sub>
 
 <br><br>
 
