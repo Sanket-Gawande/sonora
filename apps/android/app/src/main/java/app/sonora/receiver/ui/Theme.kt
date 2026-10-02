@@ -87,6 +87,8 @@ object Icons {
     val Next = icon("next", "M6,6.5 L14.5,12 L6,17.5 Z M17.5,6.5 V17.5", fill = true)
     val Music = icon("music", "M9,17.5 V6 L19,4 V15.5 M9,17.5 A2.5,2.5 0 1 1 4,17.5 A2.5,2.5 0 1 1 9,17.5 Z M19,15.5 A2.5,2.5 0 1 1 14,15.5 A2.5,2.5 0 1 1 19,15.5 Z")
     val Down = icon("down", "M6,9 L12,15 L18,9")
+    val Open = icon("open", "M7,17 L17,7 M9,7 H17 V15")
+    val Muted = icon("muted", "M4,9.5 H7.2 L12,5.5 V18.5 L7.2,14.5 H4 Z M16,9.5 L21,14.5 M21,9.5 L16,14.5")
     val Logo = ImageVector.Builder("logo", 24.dp, 24.dp, 24f, 24f).apply {
         path(stroke = SolidColor(Color.White), strokeAlpha = 0.5f, strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round) {
             moveTo(4f, 9.5f); curveTo(7f, 5.5f, 9f, 5.5f, 12f, 9.5f); reflectiveCurveTo(17f, 13.5f, 20f, 9.5f)

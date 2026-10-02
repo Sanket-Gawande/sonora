@@ -28,10 +28,10 @@ $arguments = @('/nologo', '/target:winexe', '/platform:anycpu', '/optimize+', '/
     ('/resource:' + (Join-Path $appRoot 'Styles.xaml') + ',Sonora.Styles.xaml'),
     ('/resource:' + $icon + ',Sonora.Sonora.ico'),
     ('/resource:' + $fontResources + ',Sonora.g.resources'))
-foreach ($assembly in 'System.dll', 'System.Core.dll', 'System.Xml.dll', 'System.Xaml.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'Microsoft.CSharp.dll') {
+foreach ($assembly in 'System.dll', 'System.Core.dll', 'System.Security.dll', 'System.Xml.dll', 'System.Xaml.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'Microsoft.CSharp.dll') {
     $arguments += '/reference:' + (Join-Path $framework $assembly)
 }
-foreach ($assembly in 'WindowsBase.dll', 'PresentationCore.dll', 'PresentationFramework.dll', 'UIAutomationProvider.dll', 'UIAutomationTypes.dll') {
+foreach ($assembly in 'WindowsBase.dll', 'PresentationCore.dll', 'PresentationFramework.dll', 'UIAutomationProvider.dll', 'UIAutomationTypes.dll', 'UIAutomationClient.dll') {
     $arguments += '/reference:' + (Join-Path $framework ('WPF\' + $assembly))
 }
 # Windows' own media-session API (what's playing, play/pause/next) comes from the WinRT metadata
@@ -57,5 +57,5 @@ if ($Verify) {
     if ($process.ExitCode -ne 0) { throw ('Verification failed. See ' + (Join-Path $env:LOCALAPPDATA 'Sonora\error.log')) }
     Get-Content (Join-Path $verification 'verification.txt')
 }
-Compress-Archive -Path $package -DestinationPath (Join-Path $buildRoot 'Sonora-Windows-0.4.zip') -Force
+Compress-Archive -Path $package -DestinationPath (Join-Path $buildRoot 'Sonora-Windows-0.5.zip') -Force
 Write-Output ('Built: ' + (Join-Path $package 'Sonora.exe'))

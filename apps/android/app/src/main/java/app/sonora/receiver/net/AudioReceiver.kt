@@ -8,6 +8,7 @@ import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
@@ -36,7 +37,13 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
     )
 
     private val codec = PacketCodec(secret)
-    private val jitter = JitterBuffer(PACKET_BYTES)
+    // Starts low and adapts (JitterBuffer), latency first: a cable starts at 25 ms of cushion,
+    // Wi‑Fi at 40 ms; either grows when the connection makes playback run dry (Wi‑Fi up to 200 ms on
+    // a busy network) and creeps back down to 15-20 ms while it's steady.
+    private val jitter = if (host == null) JitterBuffer(PACKET_BYTES, targetDepth = 8, maxDepth = 80, floor = 4, ceiling = 40)
+    else JitterBuffer(PACKET_BYTES, targetDepth = 5, maxDepth = 40, floor = 3, ceiling = 20)
+    // UDP has no connection: "connected" there means a packet arrived in the last 1.5 s.
+    @Volatile private var lastPacket = 0L
     @Volatile private var running = false
     @Volatile private var connected = false
     // The output picked in the player (null: Android decides), and the one Android really plays on.
@@ -52,7 +59,7 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
     private var rejected = 0L
     @Volatile private var closer: (() -> Unit)? = null
 
-    fun stats() = Stats(connected, received, audible, rejected, jitter.played, jitter.concealed, jitter.late, jitter.depth * PACKET_MS)
+    fun stats() = Stats(if (host == null) SystemClock.elapsedRealtime() - lastPacket < 1500 else connected, received, audible, rejected, jitter.played, jitter.concealed, jitter.late, jitter.depth * PACKET_MS)
 
     fun start() {
         running = true
@@ -64,6 +71,7 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
         val (result, packet) = codec.open(buffer, length)
         if (result != PacketCodec.Result.Ok || packet == null) { rejected++; return }
         received++
+        lastPacket = SystemClock.elapsedRealtime()
         if (!packet.silence) audible++
         jitter.push(packet.sequence, packet.pcm)
     }
@@ -137,6 +145,12 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
         track.setPreferredDevice(applied)
         track.play()
         routed = track.routedDevice
+        // Android sizes even a low-latency track for the worst case (80 ms on a moto g82), and a
+        // blocking writer keeps it full: allow three packets (15 ms) queued, and give back one more
+        // packet of room whenever the speaker actually runs short.
+        var room = runCatching { track.setBufferSizeInFrames(PACKET_FRAMES * 3) }.getOrDefault(-1)
+        var underruns = track.underrunCount
+        var checked = 0
         val silence = ByteArray(PACKET_BYTES)
         val stamp = AudioTimestamp()
         var written = 0L
@@ -158,6 +172,14 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
                 // Blocking write paces playback at the device's real rate.
                 track.write(next ?: silence, 0, PACKET_BYTES)
                 written += PACKET_FRAMES
+                if (room > 0 && ++checked >= 40) {
+                    checked = 0
+                    val count = track.underrunCount
+                    if (count > underruns && room < track.bufferCapacityInFrames) {
+                        room = track.setBufferSizeInFrames(minOf(track.bufferCapacityInFrames, room + PACKET_FRAMES))
+                    }
+                    underruns = count
+                }
             }
         } finally {
             track.removeOnRoutingChangedListener(routing)

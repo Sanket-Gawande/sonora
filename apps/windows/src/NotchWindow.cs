@@ -208,6 +208,14 @@ namespace Sonora {
   // ---------- state → view ----------
   bool HasMedia { get { return media.Current != null; } }
   bool HasProgress { get { return media.Current != null && media.Current.Duration > TimeSpan.Zero; } }
+  // Something is playing and nothing can hear it: the PC's speakers are muted, and no phone is
+  // streaming, or the phone is muted here or turned all the way down. Easy to walk away from.
+  bool NobodyHears {
+   get {
+    var now = media.Current;
+    return now != null && now.Playing && session.PcMuted && (!session.IsActive || session.Muted || session.PhoneLevel == 0);
+   }
+  }
   bool CompactShowsMedia { get { return HasMedia && session.State != LinkState.Pairing && session.State != LinkState.Reconnecting; } }
 
   NotchView TargetView() {
@@ -215,6 +223,7 @@ namespace Sonora {
     bool playing = media.Current != null && media.Current.Playing;
     return session.State != LinkState.Offline || playing ? NotchView.Compact : NotchView.Idle;
    }
+   if (session.Approval != null) return NotchView.Pairing;
    if (settingsOpen) return NotchView.Settings;
    if (session.State == LinkState.Pairing) return NotchView.Pairing;
    return NotchView.Home;
@@ -223,19 +232,20 @@ namespace Sonora {
   Size SizeFor(NotchView v) {
    switch (v) {
     case NotchView.Idle: return new Size(132, 28);
-    case NotchView.Compact: return new Size(CompactShowsMedia ? 340 : 300, 36);
+    case NotchView.Compact: return new Size(NobodyHears ? 420 : CompactShowsMedia ? 340 : 300, 36);
     case NotchView.Pairing: return new Size(580, 200);
-    case NotchView.Settings: return new Size(640, 256);
-    default: return new Size(620, HasProgress ? 212 : 186);
+    case NotchView.Settings: return new Size(640, 308);
+    default: return new Size(620, (HasProgress ? 264 : 238) + (NobodyHears ? 26 : 0));
    }
   }
 
   // Views update in place where possible so keyboard focus survives state changes.
   string Signature(NotchView v) {
    switch (v) {
-    case NotchView.Compact: return "compact:" + session.State + CompactShowsMedia;
-    case NotchView.Home: return "home:" + session.State + session.Busy + session.Problem + session.PluggedPhone + HasMedia + HasProgress;
-    case NotchView.Pairing: return "pairing:" + session.PairingCode;
+    case NotchView.Compact: return "compact:" + session.State + CompactShowsMedia + NobodyHears;
+    case NotchView.Home: return "home:" + session.State + session.Busy + session.Problem + session.PluggedPhone + session.PluggedWireless + HasMedia + HasProgress + session.PcMuted + session.MutedBy + session.WifiReady + session.OverWifi + NobodyHears;
+    case NotchView.Pairing: return "pairing:" + session.PairingCode + (session.Approval == null ? "" : ":wifi:" + session.Approval.Code);
+    case NotchView.Settings: return "settings:" + (testing ? 0 : session.WifiPhoneCount) + session.WifiProblem + session.AllowWifi;
     default: return v.ToString();
    }
   }
@@ -395,7 +405,8 @@ namespace Sonora {
 
   // A press anywhere but the notch itself (its body or ears) closes it, like a menu.
   void OnPressAnywhere(int x, int y) {
-   if (!expanded || !IsVisible) return;
+   // A phone asking to pair waits for an answer (or its minute), not for a stray click.
+   if (!expanded || !IsVisible || session.Approval != null) return;
    Point p;
    try { p = notch.PointFromScreen(new Point(x, y)); }
    catch (InvalidOperationException) { return; }

@@ -16,6 +16,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,10 +31,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -73,8 +76,10 @@ import app.sonora.receiver.Outputs
 import app.sonora.receiver.ReceiverModel
 import app.sonora.receiver.ReceiverService
 import app.sonora.receiver.Screen
+import app.sonora.receiver.Trust
 import app.sonora.receiver.UsbStatus
 import app.sonora.receiver.net.PcFinder
+import app.sonora.receiver.net.WifiFinder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -91,7 +96,11 @@ fun SonoraApp(receiver: ReceiverModel) {
                     .systemBarsPadding()
                     .padding(horizontal = 20.dp, vertical = 16.dp),
             ) {
-                if (receiver.screen == Screen.Confirm) ConfirmScreen(receiver) else NearbyScreen(receiver)
+                when (receiver.screen) {
+                    Screen.Confirm -> ConfirmScreen(receiver)
+                    Screen.PairWifi -> WifiPairScreen(receiver)
+                    else -> NearbyScreen(receiver)
+                }
             }
         }
     }
@@ -195,7 +204,12 @@ private fun Chip(label: String, live: Boolean) {
 private fun NearbyScreen(receiver: ReceiverModel) {
     val context = LocalContext.current
     val usb = rememberUsbStatus()
-    val pc = PcFinder.pc
+    // PCs with Sonora open on this Wi‑Fi (or this phone's hotspot).
+    val wifi = WifiFinder.pcs
+    // The PC reached through adb: over the cable, or over wireless debugging when there's no cable.
+    // Without a cable, a PC that's also on the Wi‑Fi is better reached directly, so it's offered
+    // there only. (While the channel itself is on Wi‑Fi, there's no adb PC to show.)
+    val pc = PcFinder.pc?.takeIf { found -> !PcFinder.overWifi && (usb.cable || wifi.none { it.id == found.id }) }
     val active = receiver.active
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -214,21 +228,33 @@ private fun NearbyScreen(receiver: ReceiverModel) {
             when {
                 active != null -> "Your PC’s audio plays here, even when you leave the app."
                 pc != null -> "Sonora is open on ${pc.name}. Connect to hear it on this phone."
-                else -> "Plug this phone into your PC and open Sonora there. Your PC shows up here by itself."
+                wifi.isNotEmpty() -> "Sonora is open on this Wi‑Fi. Connect to hear your PC on this phone."
+                else -> "Open Sonora on your PC. It shows up here by itself, on this Wi‑Fi or over a USB cable."
             },
             style = text(15, color = Sonora.Text2).copy(lineHeight = text(15).fontSize * 1.45f),
         )
         Spacer(Modifier.height(24.dp))
-        when {
-            active != null -> ConnectedCard(active.name, active.host == ReceiverService.LOOPBACK) { receiver.openActive() }
-            pc != null -> AvailableCard(pc, receiver.connecting, receiver.connectProblem ?: pc.problem)
-            else -> FindingCard(usb)
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (active != null) {
+                ConnectedCard(active.name, active.host == ReceiverService.LOOPBACK) { receiver.openActive() }
+            } else {
+                // Wi‑Fi first; a PC on the cable as well is one line under it.
+                if (pc != null && wifi.isEmpty()) AvailableCard(pc, cable = usb.cable, connecting = receiver.connecting, problem = receiver.connectProblem ?: pc.problem)
+                if (wifi.isNotEmpty()) WifiCard(wifi, receiver, buttons = wifi.size > 1)
+                if (pc != null && wifi.isNotEmpty()) UsbLine(receiver.connecting, receiver.connectProblem ?: pc.problem) { receiver.connect() }
+                if (pc == null && wifi.isEmpty()) FindingCard(usb)
+            }
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(16.dp))
+        val connectingWifi = receiver.wifiTarget != null
         when {
             active != null -> PrimaryButton("Open player") { receiver.openActive() }
-            pc != null -> PrimaryButton(if (receiver.connecting) "Connecting…" else "Connect", Icons.Pc, busy = receiver.connecting) { receiver.connect() }
-            !usb.debugging -> PrimaryButton("Open developer options") { openDeveloperOptions(context) }
+            wifi.size == 1 -> PrimaryButton(if (connectingWifi) "Connecting…" else "Connect over Wi‑Fi", Icons.Pc, busy = connectingWifi) { receiver.connectWifi(context, wifi[0]) }
+            pc != null && wifi.isEmpty() -> PrimaryButton(if (receiver.connecting) "Connecting…" else "Connect", Icons.Pc, busy = receiver.connecting) { receiver.connect() }
+            wifi.isEmpty() && !usb.debugging -> PrimaryButton("Open developer options") { openDeveloperOptions(context) }
         }
     }
 }
@@ -254,14 +280,14 @@ private fun rememberUsbStatus(): UsbStatus {
     return status
 }
 
-// A PC found over the cable, with Sonora open and ready.
+// A PC found through adb, with Sonora open and ready: over the cable, or over wireless debugging.
 @Composable
-private fun AvailableCard(pc: PcFinder.Pc, connecting: Boolean, problem: String?) {
+private fun AvailableCard(pc: PcFinder.Pc, cable: Boolean, connecting: Boolean, problem: String?) {
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Label("AVAILABLE")
             Spacer(Modifier.weight(1f))
-            Chip("USB", live = true)
+            Chip(if (cable) "USB" else "ADB", live = true)
         }
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
@@ -273,7 +299,8 @@ private fun AvailableCard(pc: PcFinder.Pc, connecting: Boolean, problem: String?
                     when {
                         connecting -> "Starting the stream…"
                         pc.busy -> "Playing to another phone. Connect moves it here."
-                        else -> "Windows · connected by USB"
+                        cable -> "Windows · connected by USB"
+                        else -> "Windows · through wireless debugging"
                     },
                     style = text(13, color = Sonora.Text2),
                     modifier = Modifier.padding(top = 2.dp),
@@ -285,6 +312,98 @@ private fun AvailableCard(pc: PcFinder.Pc, connecting: Boolean, problem: String?
             Text(problem, style = text(13, color = Sonora.Warn), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
     }
+}
+
+// PCs with Sonora open on this Wi‑Fi. With more than one (or a PC on the cable too), each row has
+// its own Connect; otherwise the screen's main button connects.
+@Composable
+private fun WifiCard(pcs: List<WifiFinder.Pc>, receiver: ReceiverModel, buttons: Boolean) {
+    val context = LocalContext.current
+    val busy = receiver.wifiTarget != null
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label("ON THIS WI‑FI")
+            Spacer(Modifier.weight(1f))
+            Chip("Wi‑Fi", live = true)
+        }
+        pcs.forEach { pc ->
+            val connecting = receiver.wifiTarget?.id == pc.id
+            // Read again after a pairing (the target clears when it's done).
+            val paired = remember(pc.id, receiver.wifiTarget) { Trust.key(context, pc.id) != null }
+            val problem = receiver.wifiProblem?.takeIf { it.first == pc.id }?.second
+            Spacer(Modifier.height(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.semantics(mergeDescendants = true) {},
+            ) {
+                DeviceTile(Icons.Pc)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(pc.name, style = text(16, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        when {
+                            connecting -> "Connecting…"
+                            !paired -> "Windows · allow this phone on the PC once"
+                            pc.wifi -> "Windows · on this Wi‑Fi"
+                            else -> "Windows · on this phone’s hotspot"
+                        },
+                        style = text(13, color = Sonora.Text2),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                if (buttons) {
+                    Spacer(Modifier.width(10.dp))
+                    if (connecting) CircularProgressIndicator(Modifier.size(20.dp), color = Sonora.Text2, strokeWidth = 2.dp)
+                    else SmallButton("Connect", enabled = !busy) { receiver.connectWifi(context, pc) }
+                }
+            }
+            if (problem != null && !connecting) {
+                Spacer(Modifier.height(10.dp))
+                Text(problem, style = text(13, color = Sonora.Warn), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
+        }
+    }
+}
+
+// The PC is on the cable too: USB as the quieter choice under the Wi‑Fi card.
+@Composable
+private fun UsbLine(connecting: Boolean, problem: String?, connect: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .border(1.dp, Sonora.Line, RoundedCornerShape(18.dp))
+            .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph(Icons.Phone, 18.dp, Sonora.Text3)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            if (connecting) "Connecting over USB…" else problem ?: "Also reachable over USB",
+            style = text(13, color = if (problem != null && !connecting) Sonora.Warn else Sonora.Text2),
+            modifier = Modifier.weight(1f),
+        )
+        Box(
+            Modifier
+                .height(44.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable(enabled = !connecting, role = Role.Button, onClickLabel = "Connect over USB", onClick = connect)
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) { Text("Use USB", style = text(13, FontWeight.SemiBold, Sonora.Signal)) }
+    }
+}
+
+@Composable
+private fun SmallButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (enabled) Sonora.Text else Sonora.Text.copy(alpha = 0.4f))
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, style = text(14, FontWeight.SemiBold, Sonora.Ink)) }
 }
 
 // No PC yet: what the phone can check for itself, ticked off as it happens.
@@ -394,7 +513,7 @@ private fun ConnectedCard(name: String, usb: Boolean, open: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             Chip(if (connected) "Streaming" else "Connecting", connected)
         }
-        val (media, art) = rememberSteadyMedia(if (usb) PcFinder.media else null, if (usb) PcFinder.artwork else null)
+        val (media, art) = rememberSteadyMedia(PcFinder.media, PcFinder.artwork)
         if (media != null) {
             Spacer(Modifier.height(14.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(Sonora.Line))
@@ -464,6 +583,77 @@ private fun ConfirmScreen(receiver: ReceiverModel) {
         Text(if (receiver.overUsb) "Connected by USB" else "On your Wi‑Fi", style = text(13, color = Sonora.Text3))
         Spacer(Modifier.weight(1f))
         PrimaryButton("Numbers match · Pair") { receiver.confirm(context) }
+        QuietButton("Cancel") { receiver.back() }
+    }
+}
+
+// ---------- pair on Wi‑Fi ----------
+
+// The first time with a PC on Wi‑Fi: this phone and the PC show the same number, and the PC's
+// notch asks to Allow it. Nothing to tap here but Cancel.
+@Composable
+private fun WifiPairScreen(receiver: ReceiverModel) {
+    val name = receiver.wifiTarget?.name ?: "your PC"
+    val code = receiver.wifiCode
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(role = Role.Button, onClickLabel = "Cancel") { receiver.back() }
+                    .semantics { contentDescription = "Cancel" },
+                contentAlignment = Alignment.Center,
+            ) { Glyph(Icons.Back, 22.dp) }
+        }
+        Spacer(Modifier.weight(1f))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeviceTile(Icons.Pc, 64.dp)
+            Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf(0.35f, 0.6f, 1f).forEach { alpha ->
+                    Box(Modifier.size(5.dp).clip(CircleShape).background(Sonora.Signal.copy(alpha = alpha)))
+                }
+            }
+            DeviceTile(Icons.Phone, 64.dp)
+        }
+        Spacer(Modifier.height(22.dp))
+        Text(
+            if (code == null) "Asking $name…" else "Allow on $name",
+            style = text(26, FontWeight.SemiBold, tracking = -0.02f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() },
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (code == null) "Sonora on your PC is opening to ask about this phone."
+            else "Your PC shows a number too. If it’s the same, click Allow there.",
+            style = text(15, color = Sonora.Text2),
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(22.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(22.dp))
+                .background(Sonora.Card)
+                .padding(horizontal = 28.dp, vertical = 18.dp)
+                .semantics { contentDescription = if (code == null) "Waiting for the number" else "Pairing number $code" },
+            contentAlignment = Alignment.Center,
+        ) {
+            // The number's own size even while waiting, so nothing jumps when it arrives.
+            Text(code ?: "000 000", style = text(44, FontWeight.SemiBold, if (code == null) Color.Transparent else Sonora.Text, 0.1f).copy(fontFeatureSettings = "tnum"))
+            if (code == null) CircularProgressIndicator(Modifier.size(26.dp), color = Sonora.Text2, strokeWidth = 2.5.dp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (code != null) {
+                CircularProgressIndicator(Modifier.size(12.dp), color = Sonora.Text3, strokeWidth = 1.5.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(if (code == null) "On your Wi‑Fi" else "Waiting for Allow on the PC", style = text(13, color = Sonora.Text3))
+        }
+        Spacer(Modifier.weight(1f))
+        Text("Only the first time. After that it connects in one tap.", style = text(13, color = Sonora.Text3), textAlign = TextAlign.Center)
+        Spacer(Modifier.height(8.dp))
         QuietButton("Cancel") { receiver.back() }
     }
 }

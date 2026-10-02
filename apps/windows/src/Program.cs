@@ -7,8 +7,8 @@ using System.Windows.Threading;
 
 [assembly: AssemblyTitle("Sonora")]
 [assembly: AssemblyProduct("Sonora")]
-[assembly: AssemblyVersion("0.4.0.0")]
-[assembly: AssemblyFileVersion("0.4.0.0")]
+[assembly: AssemblyVersion("0.5.0.0")]
+[assembly: AssemblyFileVersion("0.5.0.0")]
 [assembly: AssemblyDescription("Sonora Windows notch · preview")]
 
 namespace Sonora {
@@ -18,7 +18,7 @@ namespace Sonora {
   [STAThread]
   static int Main(string[] args) {
    if (args.Length > 0 && args[0] == "--capture-test") {
-    try { return CaptureTest.Run(args.Length > 1 ? args[1] : Environment.CurrentDirectory, Array.IndexOf(args, "--tone") >= 0); }
+    try { return CaptureTest.Run(args.Length > 1 ? args[1] : Environment.CurrentDirectory, Array.IndexOf(args, "--tone") >= 0, Array.IndexOf(args, "--muted") >= 0); }
     catch (Exception error) { Log(error); return 1; }
    }
    if (args.Length > 0 && args[0] == "--presence-test") {
@@ -26,7 +26,7 @@ namespace Sonora {
     catch (Exception error) { Log(error); return 1; }
    }
    if (args.Length > 0 && args[0] == "--media-test") {
-    try { return MediaTest.Run(args.Length > 1 ? args[1] : Environment.CurrentDirectory, Array.IndexOf(args, "--track-change") >= 0); }
+    try { return MediaTest.Run(args.Length > 1 ? args[1] : Environment.CurrentDirectory, Array.IndexOf(args, "--track-change") >= 0, Array.IndexOf(args, "--link") >= 0, Array.IndexOf(args, "--show") >= 0); }
     catch (Exception error) { Log(error); return 1; }
    }
    if (args.Length > 0 && args[0] == "--usb-stream") {
@@ -57,7 +57,7 @@ namespace Sonora {
      };
      Ui.Initialize(app);
      var prefs = Preferences.Load(verify);
-     var session = new Session(prefs.Volume);
+     var session = new Session(prefs);
      var meter = new AudioMeter();
      var media = new MediaSession();
      var notch = new NotchWindow(session, media, prefs, meter, verify);
@@ -81,6 +81,8 @@ namespace Sonora {
        case "seek": media.Seek(position); break;
       }
      };
+     // The phone asks for the playing tab's link to open it there (docs/protocol.md, LINK).
+     session.PlayingLink = delegate { return PlayingApp.Link(media.Current); };
 
      Tray tray = null;
      Action quit = delegate {
@@ -93,6 +95,8 @@ namespace Sonora {
       app.Shutdown();
      };
      tray = new Tray(notch, session, media, quit);
+     // A phone on Wi-Fi asking to pair opens the notch with its number.
+     session.ApprovalRequested += delegate { notch.ShowNotch(); notch.Expand(false); };
      ListenForSecondLaunch(app, notch);
      notch.Show();
      if (!background) notch.Expand(false);

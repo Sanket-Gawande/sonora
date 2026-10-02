@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        receiver.start()
+        receiver.start(this)
     }
 
     override fun onStop() {

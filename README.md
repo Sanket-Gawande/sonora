@@ -6,7 +6,7 @@
 
 **Your PC's sound, on your phone.**
 
-Stream everything your Windows PC plays to an Android phone over a USB cable,<br>
+Stream everything your Windows PC plays to an Android phone over Wi‑Fi or a USB cable,<br>
 with the song, cover art and controls on both screens.
 
 [![Latest release](https://img.shields.io/github/v/release/Sanket-Gawande/sonora?label=release&color=a3b8ff&labelColor=17171a)](https://github.com/Sanket-Gawande/sonora/releases/latest)
@@ -40,8 +40,8 @@ with the song, cover art and controls on both screens.
 <tr>
 <td width="50%" valign="top">
 
-**🔌 One tap to connect**<br>
-Plug the phone in and your PC shows up in the app. Tap Connect. No account, no cloud, no Wi‑Fi setup.
+**📶 Wi‑Fi or USB, one tap**<br>
+Open the app and your PC shows up on your Wi‑Fi (or the phone's hotspot). Allow the phone on the PC once, then it's one tap. No account, no cloud. USB works too.
 
 </td>
 <td width="50%" valign="top">
@@ -54,14 +54,14 @@ Title, artist, cover and position from whatever plays on the PC (Spotify, YouTub
 <tr>
 <td valign="top">
 
-**🎧 Your earphones work**<br>
-Play/pause and skip on wired or Bluetooth earphones control the PC. Pick the phone speaker, wired, USB or Bluetooth output.
+**🎧 Your earphones work, the PC can go quiet**<br>
+Earphone buttons control the PC. Mute the PC's speakers from the phone so only the phone plays, and open the song on the phone with one tap.
 
 </td>
 <td valign="top">
 
-**⏱️ Latency, measured**<br>
-The delay from your PC to the phone's speaker is measured end to end and colour-coded. Nothing is estimated.
+**⏱️ Low latency, measured**<br>
+About 130 ms from the PC to the phone's speaker over Wi‑Fi, measured end to end and shown in colour. The buffer adapts to the network and shrinks while it's steady.
 
 </td>
 </tr>
@@ -69,13 +69,13 @@ The delay from your PC to the phone's speaker is measured end to end and colour-
 <td valign="top">
 
 **🔒 Private by design**<br>
-Audio is sealed with AES‑256 and HMAC‑SHA256. The key only travels over the cable, and other apps on the phone can't listen in or take control.
+Audio is sealed with AES‑256 and HMAC‑SHA256. On Wi‑Fi the phone pairs once with a number you confirm on the PC; keys are derived on both sides and never sent.
 
 </td>
 <td valign="top">
 
 **🪟 A notch that stays out of the way**<br>
-It opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, never steals focus, closes when you click away, steps aside for fullscreen apps and takes its colour from your wallpaper.
+Opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, shows the PC's volume and the phone, jumps to the tab that's playing, and warns when nobody can hear it.
 
 </td>
 </tr>
@@ -90,13 +90,19 @@ It opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, never stea
 
 | | Download | You need |
 |---|---|---|
-| **Windows** | [`Sonora-Windows-0.4.zip`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.4.0/Sonora-Windows-0.4.zip) | Windows 10 or 11, and Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools) |
-| **Android** | [`Sonora-Android-0.4.apk`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.4.0/Sonora-Android-0.4.apk) | Android 8.0 or later, a USB cable, USB debugging on |
+| **Windows** | [`Sonora-Windows-0.5.zip`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.5.0/Sonora-Windows-0.5.zip) | Windows 10 or 11 |
+| **Android** | [`Sonora-Android-0.5.apk`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.5.0/Sonora-Android-0.5.apk) | Android 8.0 or later |
 
-1. **Windows:** extract the zip anywhere, then extract Google's `platform-tools` folder next to `Sonora.exe`. Already have Android Studio? Skip that part.
-2. **Android:** install the APK, then turn on **USB debugging**: *Settings › About phone*, tap *Build number* 7 times, then *Settings › System › Developer options › USB debugging*.
-3. **Plug the phone in** and tap **Allow** when it asks about USB debugging.
-4. **Run `Sonora.exe`**, open Sonora on the phone and tap **Connect**. That's it.
+1. **Windows:** extract the zip anywhere and run `Sonora.exe`. Windows asks once whether Sonora may accept connections on your network: allow it.
+2. **Android:** install the APK and open Sonora. Your PC shows up when both are on the same Wi‑Fi (or the PC is on the phone's hotspot).
+3. **Tap Connect over Wi‑Fi.** The first time, the phone and the notch show the same number: click **Allow** on the PC. After that it's one tap.
+
+<details>
+<summary><b>Over USB instead</b></summary>
+
+Extract Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools) next to `Sonora.exe` (or have Android Studio), turn on **USB debugging** on the phone (*Settings › About phone*, tap *Build number* 7 times, then *Developer options › USB debugging*), plug in, tap **Allow**, then **Use USB** in the app.
+
+</details>
 
 Sonora adds itself to the Start menu on first run, so after a restart it's one search away. Want it running all the time? Turn on **Start with Windows** in its settings.
 
@@ -116,12 +122,12 @@ flowchart LR
         buffer[Jitter buffer] --> out[Speaker, wired<br/>or Bluetooth]
         player[Player and<br/>earphone buttons]
     end
-    seal == USB cable ==> buffer
+    seal == Wi‑Fi or USB ==> buffer
     media -. now playing .-> player
     player -. play, pause, skip, seek .-> media
 ```
 
-Sonora captures the PC's output as it's mixed, cuts it into 5 ms encrypted packets and sends them over the cable with `adb reverse`. The phone reorders them, fills any gap and plays them. A second channel on the same cable lets the phone find the PC, connect, show what's playing, send media commands and sync clocks to measure latency. The full protocol is in [docs/protocol.md](docs/protocol.md).
+Sonora captures the PC's output as it's mixed, cuts it into 5 ms encrypted packets and sends them to the phone: as UDP on Wi‑Fi, or over the cable with `adb reverse`. The phone reorders them, fills any gap and plays them through an adaptive buffer. A second channel finds the PC (a broadcast and multicast query on Wi‑Fi), pairs, connects, shows what's playing, sends media commands and syncs clocks to measure latency. The full protocol is in [docs/protocol.md](docs/protocol.md).
 
 ## Progress
 
@@ -133,12 +139,14 @@ Sonora captures the PC's output as it's mixed, cuts it into 5 ms encrypted packe
 | Measured end-to-end latency | ✅ Working |
 | Output picker: speaker, wired, USB, Bluetooth | ✅ Working |
 | Windows notch: hotkey, tray, Start menu, fullscreen-aware, wallpaper colour | ✅ Working |
-| Wi‑Fi streaming | 🗓️ Planned |
+| Wi‑Fi discovery, pairing and streaming | ✅ Working |
+| PC volume in the notch, Mute PC from the phone, "nobody hears this" warning | ✅ Working |
+| Open the song on the phone, jump to the playing tab on the PC | ✅ Working |
 
 ## Coming next
 
-- **Wi‑Fi streaming**, paired by scanning a QR code.
-- **Lower latency**: a buffer that shrinks while the connection is steady, and Android's fast audio path.
+- **Even lower latency**: Opus compression and clock-drift correction.
+- **Encrypted control channel** on Wi‑Fi (titles and button presses; the audio already is).
 - **Lock-screen and notification** media controls on the phone.
 - **Signed builds** and a Windows installer.
 

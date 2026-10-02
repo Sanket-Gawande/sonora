@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Xml.Serialization;
 using Microsoft.Win32;
 
@@ -10,6 +12,16 @@ namespace Sonora {
   public bool MatchWallpaper = true;
   public bool? ReduceMotion;
   public double Volume = 72;
+  // Phones on the Wi-Fi may find and connect to this PC (pairing still needs Allow). Off: USB only.
+  public bool AllowWifi = true;
+  // This PC's ID for phones on Wi‑Fi (so a paired phone knows it whatever its address), made once.
+  public string PcId;
+  // Phones paired over Wi‑Fi. Their keys are encrypted for this Windows user (DPAPI).
+  public List<WifiPhone> WifiPhones = new List<WifiPhone>();
+
+  public class WifiPhone {
+   public string Id, Model, Key;
+  }
 
   static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sonora");
   static readonly string FilePath = Path.Combine(Folder, "preferences.xml");
@@ -21,9 +33,16 @@ namespace Sonora {
     try { using (var file = File.OpenRead(FilePath)) prefs = (Preferences)new XmlSerializer(typeof(Preferences)).Deserialize(file); }
     catch (Exception) { prefs = new Preferences(); }
    }
-   if (double.IsNaN(prefs.Volume)) prefs.Volume = 72;
-   prefs.Volume = Math.Max(0, Math.Min(100, prefs.Volume));
    prefs.ReadOnly = readOnly;
+   if (double.IsNaN(prefs.Volume)) prefs.Volume = 72;
+   if (prefs.WifiPhones == null) prefs.WifiPhones = new List<WifiPhone>();
+   if (prefs.PcId == null || prefs.PcId.Length != 16) {
+    var id = new byte[8];
+    using (var rng = new RNGCryptoServiceProvider()) rng.GetBytes(id);
+    prefs.PcId = BitConverter.ToString(id).Replace("-", "").ToLowerInvariant();
+    prefs.Save();
+   }
+   prefs.Volume = Math.Max(0, Math.Min(100, prefs.Volume));
    return prefs;
   }
 
@@ -36,6 +55,27 @@ namespace Sonora {
   }
 
   public static string LogPath { get { return Path.Combine(Folder, "error.log"); } }
+
+  // The long-term key of a phone paired over Wi‑Fi, or null.
+  // Called on the phone watcher's threads as well as the UI's.
+  public byte[] WifiKey(string phoneId) {
+   lock (WifiPhones) foreach (var phone in WifiPhones) {
+    if (phone.Id != phoneId || phone.Key == null) continue;
+    try { return ProtectedData.Unprotect(Convert.FromBase64String(phone.Key), null, DataProtectionScope.CurrentUser); }
+    catch (CryptographicException) { return null; } catch (FormatException) { return null; }
+   }
+   return null;
+  }
+
+  public void RememberWifi(string phoneId, string model, byte[] key) {
+   lock (WifiPhones) {
+    WifiPhones.RemoveAll(delegate(WifiPhone p) { return p.Id == phoneId; });
+    WifiPhones.Add(new WifiPhone { Id = phoneId, Model = model, Key = Convert.ToBase64String(ProtectedData.Protect(key, null, DataProtectionScope.CurrentUser)) });
+   }
+   Save();
+  }
+
+  public void ForgetWifi() { lock (WifiPhones) WifiPhones.Clear(); Save(); }
  }
 
  // "Start with Windows" lives in the per-user Run key so it survives reinstalls and needs no elevation.

@@ -10,7 +10,9 @@ namespace Sonora {
  // reports what was actually measured. With --tone it plays a short, quiet 440 Hz tone on the
  // default output and times how long it takes to appear in the capture.
  static class CaptureTest {
-  public static int Run(string directory, bool tone) {
+  // `--muted` mutes the speakers (Windows' own mute) for the run and restores them after: the tone
+  // must still reach the capture, since the phone's Mute PC relies on it.
+  public static int Run(string directory, bool tone, bool muted) {
    Directory.CreateDirectory(directory);
    var report = new StringBuilder();
    var capture = new LoopbackCapture();
@@ -37,6 +39,9 @@ namespace Sonora {
     }
    };
 
+   var volume = new SystemVolume();
+   bool wasMuted = volume.Muted;
+   if (muted) volume.Muted = true;
    capture.Start();
    lock (sync) clock.Restart();
    report.AppendLine("Device format: " + capture.FormatDescription);
@@ -54,6 +59,7 @@ namespace Sonora {
    double elapsed = clock.Elapsed.TotalSeconds;
    capture.Dispose();
    if (player != null) player.Dispose();
+   if (muted) { report.AppendLine("Speakers muted during the run: " + volume.Muted); volume.Muted = wasMuted; }
    if (failure != null) throw failure;
 
    lock (sync) {

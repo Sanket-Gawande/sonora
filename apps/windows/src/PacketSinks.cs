@@ -15,7 +15,7 @@ namespace Sonora {
   readonly UdpClient udp;
   readonly IPEndPoint target;
 
-  public UdpSink(IPEndPoint target) { this.target = target; udp = new UdpClient(target.AddressFamily); }
+  public UdpSink(IPEndPoint target) { this.target = target; udp = new UdpClient(target.AddressFamily); Native.Own(udp.Client); }
 
   public bool Send(byte[] packet) {
    try { udp.Send(packet, packet.Length, target); return true; }
@@ -42,6 +42,7 @@ namespace Sonora {
   public TcpServerSink(int port) {
    // Loopback only: with `adb reverse` the phone arrives through 127.0.0.1, and nothing on the LAN can connect.
    listener = new TcpListener(IPAddress.Loopback, port);
+   Native.Own(listener.Server);
    listener.Start();
    acceptor = new Thread(Accept) { IsBackground = true, Name = "Sonora USB listener" };
    acceptor.Start();
@@ -50,7 +51,7 @@ namespace Sonora {
   void Accept() {
    while (running) {
     TcpClient next;
-    try { next = listener.AcceptTcpClient(); }
+    try { next = listener.AcceptTcpClient(); Native.Own(next.Client); }
     catch (SocketException) { return; }
     catch (ObjectDisposedException) { return; }
     next.NoDelay = true;

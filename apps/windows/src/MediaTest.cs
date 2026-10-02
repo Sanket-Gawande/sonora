@@ -6,13 +6,15 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace Sonora {
- // `Sonora.exe --media-test <dir>`: reads what Windows says is playing for four seconds and
+ // `Sonora.exe --media-test <dir> [--link] [--show]`: reads what Windows says is playing for four seconds and
  // writes it to media.txt (and the artwork to art.png). Touches nothing; the playing app keeps playing.
  // `--media-test <dir> --track-change`: the regression check for "the second song keeps the first
  // one's details". Skips to the next track, then checks that the reader that watched the change
  // shows the same title and artwork as a fresh one; then goes back a track and restores pause.
  static class MediaTest {
-  public static int Run(string directory, bool trackChange) {
+  // `--link`: also the playing tab's link, as the phone would get it; `--show`: bring the playing
+  // app (or tab) forward, as a click on the notch's track does.
+  public static int Run(string directory, bool trackChange, bool link, bool show) {
    Directory.CreateDirectory(directory);
    var report = new StringBuilder();
    var media = new MediaSession();
@@ -42,6 +44,15 @@ namespace Sonora {
     }
    }
    int result = 0;
+   if (link && now != null) {
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    string url = PlayingApp.Link(now);
+    report.AppendLine("Link: " + (url ?? "none") + " (" + clock.ElapsedMilliseconds + " ms, app ID " + now.AppId + ")");
+   }
+   if (show && now != null) {
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    report.AppendLine("Show: " + (PlayingApp.Show(now) ? "brought forward" : "not found") + " (" + clock.ElapsedMilliseconds + " ms)");
+   }
 
    if (trackChange) {
     if (now == null || !now.CanNext) {

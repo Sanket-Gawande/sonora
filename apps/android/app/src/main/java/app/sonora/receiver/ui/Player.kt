@@ -1,7 +1,9 @@
 package app.sonora.receiver.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioDeviceInfo
+import android.net.Uri
 import android.os.SystemClock
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -92,10 +94,8 @@ fun PlayerScreen(receiver: ReceiverModel) {
         }
     }
     val outputs = rememberOutputs()
-    val (media, art) = rememberSteadyMedia(
-        if (receiver.overUsb) PcFinder.media else null,
-        if (receiver.overUsb) PcFinder.artwork else null,
-    )
+    // The PC's channel follows the stream (cable or Wi‑Fi), so what's playing comes with it.
+    val (media, art) = rememberSteadyMedia(PcFinder.media, PcFinder.artwork)
     val latency = rememberLatency()
     val computer = receiver.computer ?: "your PC"
     val control: (String, Long?) -> Unit = { action, position -> PcFinder.control(action, position) }
@@ -343,18 +343,83 @@ private fun PlainButton(icon: ImageVector, label: String, enabled: Boolean, onCl
 }
 
 // Where the sound comes from, under the controls: the PC app that's playing, or the PC itself
-// when Windows reports nothing. A fixed-height row, so the layout above never moves.
+// when Windows reports nothing. With a track, ↗ opens it on this phone: the browser tab's own link
+// when the PC can read it, otherwise a search for it; then the PC pauses, so it plays in one place.
+// A fixed-height row, so the layout above never moves.
 @Composable
 private fun Source(media: Presence.Media?, computer: String) {
+    val context = LocalContext.current
     val source = media?.app?.takeIf { it.isNotBlank() } ?: computer
-    Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
-        Text(
-            source.uppercase(),
-            style = text(12, FontWeight.SemiBold, Sonora.Text2, 0.12f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.semantics { contentDescription = "Playing from $source" },
-        )
+    val track = media?.takeIf { it.title.isNotBlank() }
+    var opening by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().height(40.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // While this phone holds the PC's stream: the PC's speakers, so only the phone plays.
+        val pc = PcFinder.pc
+        if (pc?.mine == true) {
+            PcChip(pc.pcMuted)
+            Spacer(Modifier.width(8.dp))
+        }
+        Row(
+            Modifier
+                .weight(1f, fill = false)
+                .clip(RoundedCornerShape(20.dp))
+                .then(
+                    if (track == null) Modifier
+                    else Modifier.clickable(enabled = !opening, role = Role.Button, onClickLabel = "Open on this phone") {
+                        opening = true
+                        PcFinder.link { url ->
+                            opening = false
+                            val target = Presence.openable(url) ?: Presence.search(track)
+                            val opened = runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }.isSuccess
+                            if (opened && PcFinder.media?.playing == true) PcFinder.control("pause")
+                        }
+                    },
+                )
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = if (track == null) "Playing from $source" else "Playing from $source. Open on this phone"
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                source.uppercase(),
+                style = text(12, FontWeight.SemiBold, Sonora.Text2, 0.12f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (track != null) {
+                Spacer(Modifier.width(6.dp))
+                Glyph(Icons.Open, 14.dp, if (opening) Sonora.Text3 else Sonora.Text2)
+            }
+        }
+    }
+}
+
+// Mute PC: the PC's own speakers (Windows' mute); the stream to this phone carries on.
+@Composable
+private fun PcChip(muted: Boolean) {
+    val tint = if (muted) Sonora.Signal else Sonora.Text2
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (muted) Sonora.Signal.copy(alpha = 0.16f) else Color.Transparent)
+            .clickable(role = Role.Button, onClickLabel = if (muted) "Unmute the PC" else "Mute the PC") { PcFinder.mutePc(!muted) }
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (muted) "PC speakers muted. Tap to unmute" else "Mute the PC's speakers"
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph(if (muted) Icons.Muted else Icons.Speaker, 15.dp, tint)
+        Spacer(Modifier.width(6.dp))
+        Text(if (muted) "PC MUTED" else "MUTE PC", style = text(12, FontWeight.SemiBold, tint, 0.1f), maxLines = 1)
     }
 }
 

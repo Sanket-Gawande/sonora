@@ -21,7 +21,8 @@ WPF on .NET Framework 4.8, built with the C# compiler that ships with Windows, s
 - `src/NotchViews.cs`: idle, compact (now playing or the phone link), home (now playing with controls, then the phone), pairing and settings.
 - `src/MediaSession.cs`: what Windows says is playing (title, artist, app, artwork, position) and the playing app's own previous, play/pause, next and seek, via the WinRT media-session API (`Windows.Media.Control`). Reads are never cancelled (a change mid-read queues one more), every call to Windows has a time-out, the artwork is re-read on every metadata update and compared by its bytes (browsers send a placeholder first), and a check every 5 s covers events Windows drops. `--media-test <dir>` prints what it sees; `--track-change` skips a track and checks the details that follow match a fresh read.
 - `src/Session.cs`: the USB connection: find the phone, pair, stream, volume, mute, disconnect. The stream always carries whatever the PC plays. It also takes Connect and Disconnect from the phone, and restores the stream's tunnel when the cable comes back.
-- `src/PhoneWatcher.cs`: phones as they're plugged in (adb's device feed, no polling), each given a presence tunnel on 47211 so the Sonora app can see this PC and connect from the phone, and, with the stream's key, see what's playing and use its buttons (`docs/protocol.md`, "Finding the PC over USB"). `--presence-test <dir>` checks the channel's rules against a pretend phone.
+- `src/WifiTrust.cs`: pairing a phone on Wi‑Fi (ECDH P-256, the number both screens show), the join proof and the stream key. The paired phones' keys live in preferences, encrypted with DPAPI; Settings › Phones on Wi‑Fi forgets them.
+- `src/PhoneWatcher.cs`: phones as they're plugged in (adb's device feed, no polling), each given a presence tunnel on 47211 so the Sonora app can see this PC and connect from the phone, and, with the stream's key, see what's playing and use its buttons (`docs/protocol.md`, "Finding the PC over USB"). The same channel listens on TCP 47211 of every interface for phones on the Wi‑Fi, which find the PC with a UDP query on 47212, pair once (the notch asks to Allow them, with the number), then join with a proof. `--presence-test <dir>` checks the channel's rules against a pretend phone, on USB and on Wi‑Fi.
 - `src/WallpaperTheme.cs`: the wallpaper's dominant colour, used to tone the notch background (Settings › Tint to wallpaper).
 
 ## Performance
@@ -29,16 +30,20 @@ WPF on .NET Framework 4.8, built with the C# compiler that ships with Windows, s
 - The window's height follows the notch (grown before it grows, shrunk after it shrinks; anchored at the top), not a fixed 900×375 transparent area, and it's rendered in software: no GPU read-back of a layered window each frame, and no blur effect. Its width stays at the widest the notch gets: a layered window that moves while it resizes shows its old picture shifted for a frame, which flickered. Views crossfade rather than cut, and the hover lean waits for a resize to finish.
 - Only foreground changes are hooked; the old system-wide location-change hook fired for every window move (thousands per virtual-desktop switch). A 1.5 s check covers in-place fullscreen.
 - The level meter runs at 20 fps, only in the compact view, animates with render transforms (no layout), and stops redrawing in silence. The wallpaper is decoded off the UI thread; the window only moves when its rectangle changes.
+- `src/SystemVolume.cs`: the default output's own volume and mute (the notch's "This PC" row, and the phone's Mute PC). Loopback capture taps the mix before them, so muting the speakers never silences the stream (`--capture-test <dir> --tone --muted` checks it). When something plays that nobody can hear (speakers muted, and no phone or a muted one), the notch says so in amber, open and closed.
 - `src/AudioMeter.cs`: the real peak level of the default output device, which drives the waveform.
 - `src/Ui.cs`, `Styles.xaml`: tokens and controls from the canvas design (Mona Sans, a periwinkle accent, and a background toned from the wallpaper).
 - `src/OutsideClicks.cs`: tells the open notch about clicks elsewhere, so it closes like a menu.
+- `src/PlayingApp.cs`: where the music is actually playing. Windows' media session names the app, never the tab, so a browser's tab is found in the browser's accessibility tree (the tab holding the track's title, or marked "Audio playing"). Clicking the track in the notch brings that tab (or the app) forward; the phone's LINK gets the tab's address. Only on request, off the UI thread, given up after 4 s. `--media-test <dir> --link` / `--show` try both.
 - `src/Launcher.cs`: the Start menu entry, created on first run and pointed at whichever copy ran last.
 - `src/Tray.cs`, `src/Preferences.cs`, `src/Native.cs`, `src/Verifier.cs`.
+- Every socket Sonora opens is kept out of child processes (`Native.Own`): the adb server Sonora starts outlives it, and an inherited socket would keep Sonora's ports taken after a restart.
 
 ## Behaviour
 
 - Idle is a 132×28 lip on the top edge; click it or press Ctrl+Alt+S to open. Escape closes.
-- Clicking never takes focus from the app you are in. The hotkey does, and gives it back on close.
+- Clicking the playing track (cover or title) switches to the app playing it, and for a browser to the very tab.
+- The notch never takes focus when clicked (the track click hands it to the playing app on purpose). The hotkey does, and gives it back on close.
 - An open notch closes when you click anywhere else, like a menu (a mouse hook that exists only while it's open, on its own thread), or 2.5 s after the pointer leaves, except while pairing.
 - It slides away when a fullscreen app covers its own display, and returns afterwards. The hotkey, the tray icon or a second launch still opens it over a fullscreen app; it slides away again when closed.
 - Sonora puts itself in the Start menu (per user, no installer), so after a restart it's one search away. Start with Windows is off until you turn it on in settings; either entry follows the folder if you move it or unzip a newer release.

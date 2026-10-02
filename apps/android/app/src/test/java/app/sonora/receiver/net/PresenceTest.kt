@@ -35,6 +35,34 @@ class PresenceTest {
     }
 
     @Test
+    fun readsTheLinkLineWindowsSends() {
+        assertEquals("1234abcd" to "https://www.youtube.com/watch?v=abc&t=95s", Presence.link(vector.getValue("link")))
+        assertEquals("1234abce" to null, Presence.link("LINK request=1234abce&none=1"))
+        assertNull(Presence.link("MEDIA none=1"))
+        assertNull(Presence.link("LINK url=https%3A%2F%2Fexample.com"))
+    }
+
+    @Test
+    fun opensOnlyWebLinks() {
+        assertEquals("https://example.com/a", Presence.openable("https://example.com/a"))
+        assertEquals("http://example.com/", Presence.openable("http://example.com/"))
+        assertNull(Presence.openable("javascript:alert(1)"))
+        assertNull(Presence.openable("intent://scan/#Intent;scheme=zxing;end"))
+        assertNull(Presence.openable("file:///sdcard/secret.txt"))
+        assertNull(Presence.openable("content://contacts/people"))
+        assertNull(Presence.openable("https://" + "a".repeat(2100) + ".com"))
+        assertNull(Presence.openable(null))
+    }
+
+    @Test
+    fun searchesWhereTheTrackMostLikelyIs() {
+        val spotify = Presence.media("MEDIA title=Midnight%20City&artist=M83&app=Spotify", at = 0)!!
+        assertEquals("https://open.spotify.com/search/Midnight%20City%20M83", Presence.search(spotify))
+        val player = Presence.media("MEDIA title=Afterglow&artist=Night%20Drive&app=Media%20Player", at = 0)!!
+        assertEquals("https://www.youtube.com/results?search_query=Afterglow%20Night%20Drive", Presence.search(player))
+    }
+
+    @Test
     fun positionRunsWhilePlayingAndStopsAtTheEnd() {
         val playing = Presence.media("MEDIA title=x&playing=1&position=1000&duration=5000", at = 10_000)!!
         assertEquals(1_000, playing.position(10_000))

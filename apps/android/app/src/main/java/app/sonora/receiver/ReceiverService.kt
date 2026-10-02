@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -22,15 +23,16 @@ import app.sonora.receiver.net.AudioReceiver
 import app.sonora.receiver.net.PairingLink
 import app.sonora.receiver.net.PcFinder
 
-// Keeps playback alive with the screen off: a mediaPlayback foreground service. Over Wi-Fi it
-// also holds a low-latency Wi-Fi lock so power saving doesn't add jitter. Over USB it keeps
-// listening to the PC, so a stream the PC ends stops here too, and it holds a media session so
-// headphone buttons control the PC's playing app.
+// Keeps playback alive with the screen off: a mediaPlayback foreground service. It keeps listening
+// to the PC (over the cable, or on Wi‑Fi), so a stream the PC ends stops here too, and it holds a
+// media session so headphone buttons control the PC's playing app. Over Wi‑Fi it also holds a
+// low-latency Wi‑Fi lock so power saving doesn't add jitter, and the audio arrives as UDP.
 class ReceiverService : Service() {
     private var wifiLock: WifiManager.WifiLock? = null
     private var watching = false
     private var sawMine = false
     private var generation = 0
+    private var overWifi = false
     private var session: MediaSession? = null
     private var computer = "your PC"
     private val onMedia: () -> Unit = { publishSession() }
@@ -57,14 +59,20 @@ class ReceiverService : Service() {
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         else startForeground(NOTIFICATION_ID, notification)
 
-        if (host == LOOPBACK) {
-            // USB traffic arrives over the adb tunnel on loopback; the PC's presence line rides along.
-            sawMine = PcFinder.pc?.mine == true
-            if (!watching) { watching = true; PcFinder.hold(this); PcFinder.listen(onPc) }
-            // Lets the PC show this phone what's playing and take its media buttons.
-            PcFinder.authorize(secret)
-            startSession()
-        } else if (wifiLock == null) {
+        // The PC's presence channel follows the stream: over the adb tunnel, or to the PC on Wi‑Fi.
+        overWifi = host != LOOPBACK
+        PcFinder.phoneId = Trust.phoneId(this)
+        val audio = getSystemService(AudioManager::class.java)
+        PcFinder.mediaVolume = {
+            val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            audio.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+        }
+        sawMine = PcFinder.pc?.mine == true
+        if (!watching) { watching = true; PcFinder.hold(this); PcFinder.listen(onPc) }
+        // Lets the PC show this phone what's playing and take its media buttons.
+        PcFinder.authorize(secret)
+        startSession()
+        if (overWifi && wifiLock == null) {
             val wifi = applicationContext.getSystemService(WifiManager::class.java)
             @Suppress("DEPRECATION")
             val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
@@ -72,7 +80,8 @@ class ReceiverService : Service() {
         }
 
         current?.stop()
-        current = AudioReceiver(secret, host, port).also {
+        // USB: TCP through the tunnel. Wi‑Fi: the PC sends UDP to this port.
+        current = AudioReceiver(secret, if (overWifi) null else host, port).also {
             it.preferred = Outputs.device(this, Outputs.chosen)
             it.start()
         }
@@ -88,6 +97,8 @@ class ReceiverService : Service() {
         if (generation == started) {
             active.value = null
             PcFinder.authorize(null)
+            // The channel goes back to the cable once a Wi‑Fi stream ends.
+            if (overWifi) PcFinder.useWifi(null, null)
         }
         wifiLock?.takeIf { it.isHeld }?.release()
         super.onDestroy()
@@ -156,7 +167,7 @@ class ReceiverService : Service() {
     }
 
     private fun endOnPc() {
-        active.value?.let { if (it.host == LOOPBACK) PcFinder.end(it.secret) }
+        active.value?.let { PcFinder.end(it.secret) }
     }
 
     private fun notification(computer: String): Notification {
@@ -209,7 +220,7 @@ class ReceiverService : Service() {
 
         // The listener's Disconnect, in the app or the notification: ends it on the PC as well.
         fun disconnect(context: Context) {
-            active.value?.let { if (it.host == LOOPBACK) PcFinder.end(it.secret) }
+            active.value?.let { PcFinder.end(it.secret) }
             context.stopService(Intent(context, ReceiverService::class.java))
         }
     }

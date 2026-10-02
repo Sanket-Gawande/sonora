@@ -8,13 +8,15 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.sonora.receiver.net.PairingLink
 import app.sonora.receiver.net.PcFinder
+import app.sonora.receiver.net.WifiFinder
 
-enum class Screen { Nearby, Confirm, Receiving }
+enum class Screen { Nearby, Confirm, PairWifi, Receiving }
 
 // UI state for the receiver. `active` is the stream the playback service is running; it outlives
 // any screen, so leaving the player never stops the audio. `link` is what the current screen is
@@ -36,17 +38,133 @@ class ReceiverModel {
     var connectProblem by mutableStateOf<String?>(null)
         private set
 
+    // Connecting to a PC on Wi‑Fi: which one, and the number to compare while the PC decides
+    // (null until the PC sends its half). `wifiProblem`: a PC's ID and why the last try failed.
+    var wifiTarget by mutableStateOf<WifiFinder.Pc?>(null)
+        private set
+    var wifiCode by mutableStateOf<String?>(null)
+        private set
+    var wifiProblem by mutableStateOf<Pair<String, String>?>(null)
+        private set
+    private enum class WifiStep { Idle, Reaching, Pairing, Joining }
+    private var wifiStep = WifiStep.Idle
+    private var repaired = false
+    private var app: Context? = null
+
     private val main = Handler(Looper.getMainLooper())
     private val timeout = Any()
+    private val wifiTimeout = Any()
     private val onPc: (PcFinder.Pc) -> Unit = { pc ->
         if (connecting && pc.problem != null) { connecting = false; connectProblem = pc.problem }
+        // The new connection to the PC being connected to on Wi‑Fi has greeted us (not a line still
+        // arriving on the old channel).
+        val target = wifiTarget
+        if (wifiStep == WifiStep.Reaching && target != null && pc.host == target.address && pc.id == target.id) proceedWifi()
     }
 
     val overUsb: Boolean get() = link?.host == ReceiverService.LOOPBACK
 
-    // While the app is on screen it looks for the PC.
-    fun start() { PcFinder.hold(this); PcFinder.listen(onPc) }
-    fun stop() { PcFinder.unlisten(onPc); PcFinder.release(this) }
+    // While the app is on screen it looks for the PC: on the cable, and on the Wi‑Fi.
+    fun start(context: Context) {
+        app = context.applicationContext
+        PcFinder.phoneId = Trust.phoneId(context)
+        PcFinder.hold(this)
+        PcFinder.listen(onPc)
+        WifiFinder.start(context)
+    }
+
+    fun stop() {
+        WifiFinder.stop()
+        PcFinder.unlisten(onPc)
+        PcFinder.release(this)
+    }
+
+    // Connects to a PC on Wi‑Fi: the channel moves to its address; a PC this phone hasn't paired
+    // with shows the number and asks for Allow (both screens show the same number); then the phone
+    // joins and the stream starts. A PC that has forgotten this phone just asks again.
+    fun connectWifi(context: Context, pc: WifiFinder.Pc) {
+        if (wifiStep != WifiStep.Idle) return
+        app = context.applicationContext
+        connectProblem = null
+        wifiProblem = null
+        wifiTarget = pc
+        wifiCode = null
+        repaired = false
+        wifiStep = WifiStep.Reaching
+        Log.i("Sonora", "wifi: connecting to ${pc.name} at ${pc.address} (${if (pc.wifi) "Wi‑Fi" else "this phone's network"})")
+        // Bound to the Wi‑Fi network when it was found there; this phone's own hotspot or tethering needs no binding.
+        PcFinder.useWifi(pc.address, if (pc.wifi) WifiFinder.network(context) else null)
+        PcFinder.pc?.let { if (it.host == pc.address && it.id == pc.id) proceedWifi() }
+        main.removeCallbacksAndMessages(wifiTimeout)
+        main.postAtTime({
+            if (wifiStep == WifiStep.Reaching) failWifi("Couldn’t reach ${pc.name}. Check that both are on the same Wi‑Fi.")
+        }, wifiTimeout, SystemClock.uptimeMillis() + 10_000)
+    }
+
+    private fun proceedWifi() {
+        val context = app ?: return
+        val pc = wifiTarget ?: return
+        main.removeCallbacksAndMessages(wifiTimeout)
+        val key = Trust.key(context, pc.id)
+        Log.i("Sonora", "wifi: reached ${pc.name}; ${if (key != null) "paired, joining" else "not paired yet, pairing"}")
+        if (key != null) joinWifi(key) else pairWifi()
+    }
+
+    private fun pairWifi() {
+        val context = app ?: return
+        val pc = wifiTarget ?: return
+        wifiStep = WifiStep.Pairing
+        wifiCode = null
+        current = Screen.PairWifi
+        val asked = PcFinder.pair(
+            code = { wifiCode = it },
+            done = { key ->
+                if (wifiStep == WifiStep.Pairing) {
+                    if (key == null) failWifi("${pc.name} didn’t allow this phone.")
+                    else { Trust.remember(context, pc.id, key); joinWifi(key) }
+                }
+            },
+        )
+        if (!asked) failWifi("Lost ${pc.name}. Try again.")
+    }
+
+    private fun joinWifi(key: ByteArray) {
+        val context = app ?: return
+        val pc = wifiTarget ?: return
+        wifiStep = WifiStep.Joining
+        val asked = PcFinder.join(key, ReceiverService.DEFAULT_PORT) { streamKey ->
+            if (wifiStep != WifiStep.Joining) return@join
+            when {
+                streamKey != null -> {
+                    wifiStep = WifiStep.Idle
+                    wifiTarget = null
+                    wifiCode = null
+                    val stream = PairingLink(pc.address, ReceiverService.DEFAULT_PORT, pc.name, streamKey)
+                    link = stream
+                    computer = pc.name
+                    ReceiverService.start(context, stream)
+                    current = Screen.Receiving
+                }
+                // The PC no longer knows this phone (it forgot its Wi‑Fi phones): allow it again.
+                !repaired -> { repaired = true; Trust.forget(context, pc.id); pairWifi() }
+                else -> failWifi("${pc.name} didn’t accept this phone.")
+            }
+        }
+        if (!asked) failWifi("Lost ${pc.name}. Try again.")
+    }
+
+    // Gives up (with why, for the PC's row), and puts the channel back on USB.
+    private fun failWifi(why: String?) {
+        val pc = wifiTarget
+        Log.w("Sonora", "wifi: gave up on ${pc?.name}: ${why ?: "cancelled"}")
+        main.removeCallbacksAndMessages(wifiTimeout)
+        wifiStep = WifiStep.Idle
+        wifiTarget = null
+        wifiCode = null
+        if (pc != null && why != null) wifiProblem = pc.id to why
+        if (current == Screen.PairWifi) current = Screen.Nearby
+        if (ReceiverService.activeLink == null) PcFinder.useWifi(null, null)
+    }
 
     fun connect() {
         connectProblem = null
@@ -95,6 +213,7 @@ class ReceiverModel {
 
     fun back(): Boolean {
         if (screen == Screen.Nearby) return false
+        if (screen == Screen.PairWifi) { failWifi(null); return true }
         link = null
         current = Screen.Nearby
         return true

@@ -53,6 +53,24 @@ namespace Sonora {
   [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
   [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc proc, uint process, uint thread, uint flags);
   [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hook);
+  public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr data);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr data);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint thread, uint to, bool attach);
+  [DllImport("kernel32.dll")] static extern bool SetHandleInformation(IntPtr handle, int mask, int flags);
+
+  // Sonora starts adb's server, which runs on after Sonora quits; a socket it inherited would keep
+  // Sonora's ports taken, so a restarted Sonora couldn't listen. Every socket Sonora opens is kept
+  // to itself.
+  public static T Own<T>(T socket) where T : System.Net.Sockets.Socket {
+   try { SetHandleInformation(socket.Handle, 1 /* HANDLE_FLAG_INHERIT */, 0); } catch (ObjectDisposedException) { }
+   return socket;
+  }
+
   [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 

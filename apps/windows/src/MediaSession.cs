@@ -12,6 +12,8 @@ namespace Sonora {
  // One snapshot of what is playing, as Windows reports it.
  public sealed class NowPlaying {
   public string Title, Artist, App;
+  // Windows' ID for the playing app ("chrome.exe", "Spotify.exe", a Store app's ID), for PlayingApp.
+  public string AppId;
   public bool Playing, CanToggle, CanPrevious, CanNext, CanSeek;
   public TimeSpan Position, Duration;
   public DateTime PositionAt;
@@ -138,6 +140,7 @@ namespace Sonora {
      Title = properties.Title ?? "",
      Artist = string.IsNullOrEmpty(properties.Artist) ? (properties.AlbumArtist ?? "") : properties.Artist,
      App = AppName(source.SourceAppUserModelId),
+     AppId = source.SourceAppUserModelId ?? "",
      Playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing,
      CanToggle = controls.IsPlayPauseToggleEnabled || controls.IsPlayEnabled || controls.IsPauseEnabled,
      CanPrevious = controls.IsPreviousEnabled,
@@ -232,6 +235,8 @@ namespace Sonora {
   // "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic" → "Media Player", "chrome.exe" → "Chrome".
   static string AppName(string id) {
    if (string.IsNullOrEmpty(id)) return "";
+   // Firefox names its sessions with its install hash.
+   if (System.Text.RegularExpressions.Regex.IsMatch(id, "^[0-9A-Fa-f]{16}$")) return "Firefox";
    string name = id;
    int bang = name.IndexOf('!');
    if (bang >= 0) name = name.Substring(bang + 1);

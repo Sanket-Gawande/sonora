@@ -3,6 +3,7 @@ package app.sonora.receiver.net
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JitterBufferTest {
@@ -45,6 +46,38 @@ class JitterBufferTest {
         assertEquals(4, buffer.depth)
         assertEquals(6L, buffer.trimmed)
         assertArrayEquals(packet(6), buffer.pull())
+    }
+
+    @Test
+    fun shedsTheDelayABurstLeavesBehind() {
+        // Target 4; a stall's worth of packets arrives at once and keeps the buffer 20 deep.
+        val buffer = JitterBuffer(packetBytes = 8, targetDepth = 4, maxDepth = 100)
+        var sequence = 0L
+        repeat(24) { buffer.push(sequence++, ByteArray(8)) }
+        // Steady state afterwards: one packet in for each one out, for three seconds.
+        repeat(600) {
+            buffer.pull()
+            buffer.push(sequence++, ByteArray(8))
+        }
+        assertTrue("depth ${buffer.depth}", buffer.depth <= 6)
+        assertTrue(buffer.trimmed >= 18)
+    }
+
+    @Test
+    fun growsWhenRunningDryThenRelaxes() {
+        val buffer = JitterBuffer(packetBytes = 8, targetDepth = 4, maxDepth = 100, floor = 2, ceiling = 10)
+        repeat(4) { buffer.push(it.toLong(), packet(1)) }
+        repeat(5) { buffer.pull() }
+        assertEquals(1L, buffer.underruns)
+        assertEquals(6, buffer.target)
+        // Ten steady seconds later, one packet less.
+        var sequence = 4L
+        repeat(6) { buffer.push(sequence++, packet(1)) }
+        repeat(2000) {
+            buffer.pull()
+            buffer.push(sequence++, packet(1))
+        }
+        assertEquals(5, buffer.target)
     }
 
     @Test

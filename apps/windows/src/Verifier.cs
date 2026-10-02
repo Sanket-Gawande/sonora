@@ -92,6 +92,33 @@ namespace Sonora {
    Ui.ApplySurface(null);
    notch.RefreshTheme();
 
+   // A phone on Wi-Fi asking to pair: its number, Allow and Decline; then streaming over Wi-Fi.
+   session.ShowApprovalForVerification("Pixel 8", "305 117");
+   Expect(notch.View == NotchView.Pairing, "a phone asking to pair over Wi-Fi opens its view");
+   Snap(notch, directory, "12-allow-wifi");
+   session.AnswerApproval(false);
+   Expect(session.Approval == null && notch.View == NotchView.Home, "declining returns home");
+   session.ShowWifiForVerification(true);
+   Snap(notch, directory, "13-home-streaming-wifi");
+   // Playing, with the PC's speakers and the phone both muted: the warning, open and closed.
+   session.ShowPcMutedForVerification(true);
+   session.SetMuted(true);
+   Snap(notch, directory, "14-home-nobody-hears");
+   // A long title, closed: it ends in "…" with room before the warning.
+   var playing = media.Current;
+   media.ShowForVerification(new NowPlaying {
+    Title = "Phir Se (From \"Dhurandhar The Revenge\")", Artist = "Shashwat Sachdev", App = "Chrome", Playing = true,
+    CanToggle = true, Duration = TimeSpan.FromSeconds(240), Position = TimeSpan.FromSeconds(30), PositionAt = DateTime.UtcNow, Art = SampleArt()
+   });
+   notch.Collapse();
+   notch.PushTestLevel(0.7);
+   Snap(notch, directory, "15-compact-nobody-hears");
+   media.ShowForVerification(playing);
+   notch.Expand(false);
+   session.SetMuted(false);
+   session.ShowPcMutedForVerification(false);
+   session.ShowWifiForVerification(false);
+
    session.Disconnect();
    Expect(session.State == LinkState.Offline, "disconnect");
    notch.HideNotch();
@@ -99,7 +126,7 @@ namespace Sonora {
    notch.ShowNotch();
    Expect(notch.IsVisible, "show");
 
-   report.AppendLine("PASS states: idle, home (nothing playing, playing, streaming, waiting), compact (playing, streaming), pairing, settings, mute/volume, disconnect, hide/show.");
+   report.AppendLine("PASS states: idle, home (nothing playing, playing, streaming, waiting), compact (playing, streaming), pairing, Wi-Fi approval, Wi-Fi streaming, settings, mute/volume, disconnect, hide/show.");
    report.AppendLine("Snapshots written to " + directory);
    File.WriteAllText(Path.Combine(directory, "verification.txt"), report.ToString(), Encoding.UTF8);
    notch.Close();
