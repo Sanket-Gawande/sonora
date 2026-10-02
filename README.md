@@ -24,13 +24,13 @@ with the song, cover art and controls on both screens.
 
 <br><br>
 
-<img src="docs/screenshots/android-player.png" width="240" alt="The Android player: cover art, title, seek bar, controls and the playing app">
+<img src="docs/screenshots/android-player.png" width="240" alt="The Android player over Wi-Fi: cover art, title, seek bar, controls, Mute PC and the playing app with a link to open it on the phone">
 &nbsp;&nbsp;
-<img src="docs/screenshots/android-home.png" width="240" alt="The Android home screen: connected to the PC, streaming, with a mini player">
+<img src="docs/screenshots/android-home.png" width="240" alt="The Android home screen: the PC found on this Wi-Fi, with Connect over Wi-Fi and USB as an option">
 &nbsp;&nbsp;
 <img src="docs/screenshots/android-output.png" width="240" alt="Choosing where the phone plays: Automatic or the phone speaker">
 
-<sub>On the phone: the player, home, and the output picker.</sub>
+<sub>On the phone: the player (with Mute PC), home with the PC found on Wi‑Fi, and the output picker.</sub>
 
 </div>
 
