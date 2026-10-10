@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -19,16 +20,21 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.SocketTimeoutException
+import java.net.URLEncoder
 import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 
 // PCs with Sonora open on a local network this phone shares with them: the Wi‑Fi it's on, and the
 // networks it provides itself (its hotspot, USB tethering). Every 2 s while the app is on screen, a
-// UDP broadcast to port 47212 asks "SONORA? v=1" on each, and each PC answers with its name, ID and
-// port; one not heard from for 7 s drops off the list. The Wi‑Fi socket is bound to the Wi‑Fi
-// network, so this works even when mobile data is the phone's default. docs/protocol.md, "Wi‑Fi".
+// UDP broadcast to port 47212 asks "SONORA? v=1&id=…&name=…" on each, and each PC answers with its
+// name, ID and port; one not heard from for 7 s drops off the list. The Wi‑Fi socket is bound to
+// the Wi‑Fi network, so this works even when mobile data is the default. docs/protocol.md, "Wi‑Fi".
+//
+// It doesn't ask forever: 15 s after the app opens, a network changes, or the last PC answered, it
+// stops until Search again. With no network to ask on, it doesn't ask at all.
 object WifiFinder {
     const val PORT = 47_212
+    const val SEARCH_MS = 15_000L
     private const val FORGET_MS = 7_000L
     private const val TAG = "Sonora"
     // Also asked on this multicast group: some routers drop broadcasts between Wi‑Fi devices but
@@ -41,23 +47,46 @@ object WifiFinder {
     // own hotspot or tethering, which any socket reaches.
     data class Pc(val id: String, val name: String, val address: String, val port: Int, val seen: Long, val wifi: Boolean)
 
+    // Searching: asking now. Stopped: asked for 15 s, nobody answered. NoNetwork: not on a Wi‑Fi,
+    // and no hotspot or tethering on.
+    enum class Search { Searching, Stopped, NoNetwork }
+
     // Main thread only; sorted by name, one entry per PC ID.
     var pcs by mutableStateOf<List<Pc>>(emptyList())
         private set
+    var search by mutableStateOf(Search.Searching)
+        private set
+    // Where it asks: true on a Wi‑Fi, false on this phone's own hotspot or tethering only.
+    var onWifi by mutableStateOf(true)
+        private set
+    // A PC whose notch asked this phone to connect (its answer said "invite=1"); main thread.
+    var onInvite: ((Pc) -> Unit)? = null
 
     private val main = Handler(Looper.getMainLooper())
     private val lock = Object()
     @Volatile private var wanted = false
+    @Volatile private var searchUntil = 0L
     private var worker: Thread? = null
     private var app: Context? = null
+    // The local addresses it asked from last time; a change is a new network, searched afresh.
+    private var lastNetwork = ""
 
+    // The app came on screen: look again, for 15 s.
     fun start(context: Context) {
         app = context.applicationContext
+        searchUntil = SystemClock.elapsedRealtime() + SEARCH_MS
         synchronized(lock) { wanted = true; lock.notifyAll() }
         if (worker == null) worker = thread(name = "Sonora Wi-Fi finder", isDaemon = true) { loop() }
     }
 
     fun stop() = synchronized(lock) { wanted = false }
+
+    // Search again, for 15 s.
+    fun searchAgain() {
+        searchUntil = SystemClock.elapsedRealtime() + SEARCH_MS
+        main.post { if (search == Search.Stopped) search = Search.Searching }
+        synchronized(lock) { lock.notifyAll() }
+    }
 
     // The Wi‑Fi network, if the phone is on one.
     fun network(context: Context): Network? {
@@ -72,11 +101,24 @@ object WifiFinder {
 
     private fun loop() {
         val buffer = ByteArray(512)
-        val query = "SONORA? v=1".toByteArray(Charsets.UTF_8)
         while (true) {
             synchronized(lock) { while (!wanted) lock.wait() }
             val context = app ?: continue
+            // Nothing is sent while there's no network, or the search has run its time: the
+            // addresses are only looked at, every 2 s, to notice a new network.
+            val here = localNetwork(context)
+            if (here != lastNetwork) {
+                Log.i(TAG, "discovery: network now ${here.ifEmpty { "none" }}")
+                lastNetwork = here
+                if (here.isNotEmpty()) searchUntil = SystemClock.elapsedRealtime() + SEARCH_MS
+            }
+            if (here.isEmpty()) { idle(Search.NoNetwork); continue }
+            if (SystemClock.elapsedRealtime() >= searchUntil) { idle(Search.Stopped); continue }
+            main.post { search = Search.Searching }
+
+            val query = query()
             val probes = open(context)
+            main.post { onWifi = probes.any { it.wifi } }
             val answered = sortedSetOf<String>()
             val sent = mutableListOf<String>()
             try {
@@ -94,7 +136,11 @@ object WifiFinder {
                         val answer = Presence.answer(String(buffer, 0, packet.length, Charsets.UTF_8)) ?: continue
                         val address = packet.address.hostAddress ?: continue
                         answered += "${answer.name}@$address"
-                        seen(Pc(answer.id, answer.name, address, answer.port, SystemClock.elapsedRealtime(), probe.wifi))
+                        // A PC that answers keeps the search going: when it goes, 15 s more.
+                        searchUntil = maxOf(searchUntil, SystemClock.elapsedRealtime() + SEARCH_MS)
+                        val pc = Pc(answer.id, answer.name, address, answer.port, SystemClock.elapsedRealtime(), probe.wifi)
+                        seen(pc)
+                        if (answer.invite) main.post { onInvite?.invoke(pc) }
                     }
                 }
             } finally {
@@ -104,6 +150,43 @@ object WifiFinder {
             if (round != lastRound) { lastRound = round; Log.i(TAG, "discovery: $round") }
             expire()
         }
+    }
+
+    // Not asking: says why, lets the list empty out, and looks again in 2 s (or at Search again).
+    private fun idle(why: Search) {
+        main.post { search = why }
+        if (why == Search.NoNetwork) main.post { if (pcs.isNotEmpty()) pcs = emptyList() }
+        expire()
+        lastRound = ""
+        synchronized(lock) { if (wanted) lock.wait(2000) }
+    }
+
+    // "SONORA? v=1&id=<this phone's app>&name=<model>": the PC lists this phone as nearby, and can
+    // invite it to connect.
+    private fun query(): ByteArray {
+        val id = PcFinder.phoneId?.let { "&id=$it" } ?: ""
+        val name = "&name=" + URLEncoder.encode(Build.MODEL, "UTF-8").replace("+", "%20")
+        return "SONORA? v=1$id$name".toByteArray(Charsets.UTF_8)
+    }
+
+    // The networks it could ask on, as their local addresses ("" when there's none): the Wi‑Fi,
+    // and each interface with a broadcast address (a hotspot, tethering).
+    private fun localNetwork(context: Context): String {
+        val addresses = sortedSetOf<String>()
+        network(context)?.let { net ->
+            context.getSystemService(ConnectivityManager::class.java)?.getLinkProperties(net)?.linkAddresses?.forEach { link ->
+                (link.address as? Inet4Address)?.let { addresses += it.hostAddress.orEmpty() }
+            }
+        }
+        val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }.getOrDefault(emptyList())
+        for (nic in interfaces) {
+            if (!runCatching { nic.isUp && !nic.isLoopback }.getOrDefault(false)) continue
+            for (link in nic.interfaceAddresses) {
+                val ip = link.address as? Inet4Address ?: continue
+                if (link.broadcast != null) addresses += ip.hostAddress.orEmpty()
+            }
+        }
+        return addresses.joinToString(",")
     }
 
     // One socket for the Wi‑Fi network, bound to it, and one for each network this phone provides
@@ -116,7 +199,6 @@ object WifiFinder {
             probes += Probe(DatagramSocket().apply { network.bindSocket(this); broadcast = true; soTimeout = 60 }, wifi = true)
         }.onFailure { Log.w(TAG, "discovery: can't open a socket on the Wi‑Fi: $it") }
         val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }.getOrDefault(emptyList())
-        if (network == null) Log.i(TAG, "discovery: Android names no Wi‑Fi network; using wlan0 if it's up")
         for (nic in interfaces) {
             if (nic.name == wifiInterface || !runCatching { nic.isUp && !nic.isLoopback }.getOrDefault(false)) continue
             // Without a Wi‑Fi network from Android, wlan0 (its usual Wi‑Fi interface) still counts as Wi‑Fi.

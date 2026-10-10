@@ -8,6 +8,13 @@ using Microsoft.Win32;
 namespace Sonora {
  public class Preferences {
   public string Display;
+  // Where along the top edge the notch sits: its centre, as a share of the display's width
+  // (0.5 is the middle). Dragging it changes this.
+  public double NotchCenter = 0.5;
+  // The edge it's docked to ("top", "left" or "right"), and on a side where its middle sits, as a
+  // share of the display's height.
+  public string NotchEdge = "top";
+  public double NotchSideCenter = 0.4;
   public bool HideOverFullscreen = true;
   public bool MatchWallpaper = true;
   public bool? ReduceMotion;
@@ -35,6 +42,8 @@ namespace Sonora {
    }
    prefs.ReadOnly = readOnly;
    if (double.IsNaN(prefs.Volume)) prefs.Volume = 72;
+   if (double.IsNaN(prefs.NotchCenter) || prefs.NotchCenter < 0 || prefs.NotchCenter > 1) prefs.NotchCenter = 0.5;
+   if (double.IsNaN(prefs.NotchSideCenter) || prefs.NotchSideCenter < 0 || prefs.NotchSideCenter > 1) prefs.NotchSideCenter = 0.4;
    if (prefs.WifiPhones == null) prefs.WifiPhones = new List<WifiPhone>();
    if (prefs.PcId == null || prefs.PcId.Length != 16) {
     var id = new byte[8];

@@ -27,7 +27,11 @@ namespace Sonora {
 
   readonly Dispatcher dispatcher;
   readonly Preferences prefs;
-  readonly DispatcherTimer approvalTimer, pulse, speakerWatch;
+  readonly DispatcherTimer approvalTimer, pulse, speakerWatch, lostTimer;
+  // A phone asked to connect from the notch (by its app's ID), and when; the invitation lasts 10 s.
+  string invitedId;
+  DateTime invitedAt;
+  static readonly TimeSpan InviteFor = TimeSpan.FromSeconds(10);
   // This PC's speakers (Windows' own volume and mute), followed once a second.
   readonly SystemVolume speakers = new SystemVolume();
   double pcLevel = -1;
@@ -64,6 +68,14 @@ namespace Sonora {
   // The streaming phone's media volume as it reports it, 0..100; -1 until it does.
   public int PhoneLevel { get; private set; }
   public bool WifiReady { get { return phones != null && phones.LanPort > 0; } }
+  // This PC is on a network a phone could share (PhoneWatcher.OnNetwork).
+  public bool NetworkUp { get; private set; }
+  // The phone whose Wi-Fi stream just went quiet, for a few seconds after, so the notch can say so.
+  public string Lost { get; private set; }
+  // The latest phone with the Sonora app open on this network, while no phone plays; null otherwise.
+  public string NearbyPhone { get; private set; }
+  // The notch asked that phone to connect, and it hasn't yet.
+  public bool Inviting { get { return invitedId != null && DateTime.UtcNow - invitedAt < InviteFor; } }
   public WifiRequest Approval { get; private set; }
   // Raised when a phone asks to pair, so the notch can open.
   public event EventHandler ApprovalRequested;
@@ -99,20 +111,57 @@ namespace Sonora {
    PhoneLevel = -1;
    approvalTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
    approvalTimer.Tick += delegate { approvalTimer.Stop(); AnswerApproval(false); };
-   // A Wi-Fi stream has no connection to lose: the phone's app pings every 2 s while it plays, and
-   // 20 s of silence means it has gone (out of range, or the app closed).
    speakerWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-   speakerWatch.Tick += delegate { ReadSpeakers(); };
+   speakerWatch.Tick += delegate { ReadSpeakers(); ReadNearby(); };
    ReadSpeakers();
    speakerWatch.Start();
-   pulse = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+   // A Wi-Fi stream has no connection to lose: the phone's app pings every 2 s while it plays, and
+   // 10 s of silence means it has gone (it left the Wi-Fi, or the app closed). The stream stops,
+   // and the notch says so for a few seconds rather than waiting on it.
+   pulse = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
    pulse.Tick += delegate {
-    if (!OverWifi || phones == null || phones.SinceHeard(streamSerial) < TimeSpan.FromSeconds(20)) return;
+    if (!OverWifi || phones == null || phones.SinceHeard(streamSerial) < TimeSpan.FromSeconds(10)) return;
     string device = DeviceName;
     Stop();
-    Problem = device + " stopped answering on Wi-Fi.";
+    Lost = device ?? "your phone";
+    lostTimer.Stop();
+    lostTimer.Start();
     Set(LinkState.Offline);
    };
+   lostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+   lostTimer.Tick += delegate { lostTimer.Stop(); Lost = null; Raise(); };
+   NetworkUp = PhoneWatcher.OnNetwork();
+   System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += delegate {
+    bool up = PhoneWatcher.OnNetwork();
+    dispatcher.BeginInvoke(new Action(delegate { if (up != NetworkUp) { NetworkUp = up; Raise(); } }));
+   };
+  }
+
+  // Phones that asked for this PC in the last 7 s (the app asks every 2 s while it's open).
+  void ReadNearby() {
+   if (phones == null) return;
+   string name = null, id = null;
+   if (State == LinkState.Offline && prefs.AllowWifi) {
+    var list = phones.Nearby(TimeSpan.FromSeconds(7));
+    if (list.Count > 0) { name = list[0].Name; id = list[0].Id; }
+   }
+   // The invitation lapses after 10 s, or once that phone is gone.
+   if (invitedId != null && (id != invitedId || !Inviting)) invitedId = null;
+   bool inviting = Inviting;
+   if (name != NearbyPhone || id != nearbyId || inviting != shownInviting) { NearbyPhone = name; nearbyId = id; shownInviting = inviting; Raise(); }
+  }
+  string nearbyId;
+  bool shownInviting;
+
+  // The notch's Connect for a phone on this Wi-Fi: its app, open on screen, connects by itself.
+  public void ConnectNearby() {
+   if (phones == null || nearbyId == null || State != LinkState.Offline) return;
+   invitedId = nearbyId;
+   invitedAt = DateTime.UtcNow;
+   phones.Invite(nearbyId, InviteFor);
+   shownInviting = true;
+   Lost = null;
+   Raise();
   }
 
   public int WifiPhoneCount { get { return prefs.WifiPhones.Count; } }
@@ -201,7 +250,7 @@ namespace Sonora {
    if (Busy || State != LinkState.Offline) return;
    Watch();
    if (phones.Adb == null) { Problem = UsbLink.NoAdb; problemSerial = serial; Raise(); return; }
-   Busy = true; Problem = null; problemSerial = serial; Raise();
+   Busy = true; Problem = null; problemSerial = serial; Lost = null; Raise();
    var known = phones != null ? phones.Find(serial) : null;
    ThreadPool.QueueUserWorkItem(delegate {
     string problem = null;
@@ -280,7 +329,7 @@ namespace Sonora {
   // A paired phone on Wi-Fi joined: the stream moves to it, even from another phone.
   void ConnectWifi(string serial, string model, IPEndPoint target, byte[] key) {
    if (State != LinkState.Offline) Stop();
-   Busy = false; Problem = null; problemSerial = null;
+   Busy = false; Problem = null; problemSerial = null; Lost = null; invitedId = null; NearbyPhone = null;
    streamSerial = serial; OverWifi = true; secret = key;
    DeviceName = model; PairingCode = null;
    try { sender = new AudioSender(key, target); }
@@ -427,6 +476,10 @@ namespace Sonora {
    Raise();
   }
   internal void ShowWifiForVerification(bool wifi) { OverWifi = wifi; Raise(); }
+  // The phone line's other cases: a phone on this Wi-Fi, a lost one, and this PC on no network.
+  internal void ShowPhoneLineForVerification(string nearby, string lost, bool network) {
+   NearbyPhone = nearby; Lost = lost; NetworkUp = network; Raise();
+  }
   // The speakers shown as muted without touching the real ones (the 1 s check would put them back).
   internal void ShowPcMutedForVerification(bool muted) { speakerWatch.Stop(); pcMuted = muted; Raise(); if (!muted) speakerWatch.Start(); }
 

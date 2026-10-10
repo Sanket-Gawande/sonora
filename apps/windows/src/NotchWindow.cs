@@ -14,7 +14,7 @@ using Forms = System.Windows.Forms;
 namespace Sonora {
  public enum NotchView { Idle, Compact, Home, Pairing, Settings }
 
- // A transparent, click-through host pinned to the top edge of one display. The window is kept
+ // A transparent, click-through host pinned to an edge of one display (the top, or a side). The window is kept
  // just big enough for the notch (plus slack for the spring and the hover lean), and rendered in
  // software, so each redraw of this layered window is cheap and never waits on the GPU.
  public sealed partial class NotchWindow : Window {
@@ -38,6 +38,7 @@ namespace Sonora {
   Path earLeft, earRight, outline;
   Canvas stage;
   TranslateTransform slide;
+  RotateTransform turn;
   FrameworkElement current;
   string currentSignature;
   NotchView view = NotchView.Idle;
@@ -76,6 +77,8 @@ namespace Sonora {
    Ui.ReduceMotion = ReduceMotion;
 
    BuildShell();
+   dock = testing ? Dock.Top : ParseDock(prefs.NotchEdge);
+   ApplyDock();
 
    outsideClicks = new OutsideClicks(delegate(int x, int y) { Dispatcher.BeginInvoke(new Action(delegate { OnPressAnywhere(x, y); })); });
    collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
@@ -135,7 +138,9 @@ namespace Sonora {
   // ---------- shape ----------
   void BuildShell() {
    slide = new TranslateTransform();
-   root = new Grid { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, RenderTransform = slide };
+   turn = new RotateTransform();
+   // Laid out as if on top; on a side, `turn` stands it against that edge (ApplyDock).
+   root = new Grid { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, RenderTransform = slide, LayoutTransform = turn };
    root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
    root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
    root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
@@ -151,6 +156,12 @@ namespace Sonora {
    notch.Child = stage;
    notch.SizeChanged += delegate { UpdateShape(); };
    notch.MouseEnter += delegate { hovering = true; collapseTimer.Stop(); Peek(true); };
+   // Dragged, it comes off the edge and docks to the nearest one (on any display); a press that
+   // doesn't move is still a click.
+   notch.PreviewMouseLeftButtonDown += OnDragPress;
+   notch.PreviewMouseMove += OnDragMove;
+   notch.PreviewMouseLeftButtonUp += OnDragRelease;
+   notch.LostMouseCapture += delegate { if (dragging) EndDrag(); };
    notch.MouseLeave += delegate { hovering = false; Peek(false); if (expanded && !keyboardMode) collapseTimer.Start(); };
 
    // One hairline traced down the ears, the sides and along the bottom; the top is the screen edge.
@@ -173,6 +184,7 @@ namespace Sonora {
 
   void UpdateShape() {
    double w = notch.ActualWidth, h = notch.ActualHeight, r = Math.Min(RadiusFor(h), Math.Min(w, h) / 2);
+   if (floating) { FloatingShape(w, h); return; }
    notch.CornerRadius = new CornerRadius(0, 0, r, r);
    var clip = new StreamGeometry();
    using (var ctx = clip.Open()) {
@@ -199,10 +211,27 @@ namespace Sonora {
    }
    edge.Freeze();
    outline.Data = edge;
+   CenterViews(w);
+  }
+
+  void CenterViews(double w) {
    foreach (UIElement child in stage.Children) {
     var element = child as FrameworkElement;
-    if (element != null) Canvas.SetLeft(element, Math.Round((w - element.Width) / 2));
+    if (element != null) Canvas.SetLeft(element, Math.Round((w - Along(element)) / 2));
    }
+  }
+
+  // Off the edge, under the cursor: round at both ends, no ears.
+  void FloatingShape(double w, double h) {
+   double r = Math.Min(w, h) / 2;
+   notch.CornerRadius = new CornerRadius(r);
+   var clip = new RectangleGeometry(new Rect(0, 0, w, h), r, r);
+   clip.Freeze();
+   notch.Clip = clip;
+   var edge = new RectangleGeometry(new Rect(12.5, 0.5, Math.Max(0, w - 1), Math.Max(0, h - 1)), r, r);
+   edge.Freeze();
+   outline.Data = edge;
+   CenterViews(w);
   }
 
   // ---------- state → view ----------
@@ -210,6 +239,9 @@ namespace Sonora {
   bool HasProgress { get { return media.Current != null && media.Current.Duration > TimeSpan.Zero; } }
   // Something is playing and nothing can hear it: the PC's speakers are muted, and no phone is
   // streaming, or the phone is muted here or turned all the way down. Easy to walk away from.
+  // A phone has the stream's full row (playing, or waiting for its cable); otherwise it's one line.
+  bool PhonePlaying { get { return session.State == LinkState.Streaming || session.State == LinkState.Reconnecting; } }
+
   bool NobodyHears {
    get {
     var now = media.Current;
@@ -231,11 +263,12 @@ namespace Sonora {
 
   Size SizeFor(NotchView v) {
    switch (v) {
-    case NotchView.Idle: return new Size(132, 28);
-    case NotchView.Compact: return new Size(NobodyHears ? 420 : CompactShowsMedia ? 340 : 300, 36);
+    case NotchView.Idle: return Side ? new Size(28, 84) : new Size(132, 28);
+    case NotchView.Compact: return Side ? new Size(44, 136) : new Size(NobodyHears ? 420 : CompactShowsMedia ? 340 : 300, 36);
     case NotchView.Pairing: return new Size(580, 200);
     case NotchView.Settings: return new Size(640, 308);
-    default: return new Size(620, (HasProgress ? 264 : 238) + (NobodyHears ? 26 : 0));
+    // No phone playing: its one-line row is 16 px shorter than a phone's full row.
+    default: return new Size(620, (HasProgress ? 264 : 238) + (NobodyHears ? 26 : 0) - (PhonePlaying ? 0 : 16));
    }
   }
 
@@ -243,7 +276,8 @@ namespace Sonora {
   string Signature(NotchView v) {
    switch (v) {
     case NotchView.Compact: return "compact:" + session.State + CompactShowsMedia + NobodyHears;
-    case NotchView.Home: return "home:" + session.State + session.Busy + session.Problem + session.PluggedPhone + session.PluggedWireless + HasMedia + HasProgress + session.PcMuted + session.MutedBy + session.WifiReady + session.OverWifi + NobodyHears;
+    case NotchView.Home: return "home:" + session.State + session.Busy + session.Problem + session.PluggedPhone + session.PluggedWireless + HasMedia + HasProgress + session.PcMuted + session.MutedBy + session.WifiReady + session.OverWifi + NobodyHears
+     + "|" + session.Lost + "|" + session.NearbyPhone + session.Inviting + session.NetworkUp + session.AllowWifi + session.WifiProblem;
     case NotchView.Pairing: return "pairing:" + session.PairingCode + (session.Approval == null ? "" : ":wifi:" + session.Approval.Code);
     case NotchView.Settings: return "settings:" + (testing ? 0 : session.WifiPhoneCount) + session.WifiProblem + session.AllowWifi;
     default: return v.ToString();
@@ -252,17 +286,19 @@ namespace Sonora {
 
   public void Render() {
    NotchView target = TargetView();
-   string signature = Signature(target);
+   string signature = (floating ? "float:" : Side ? DockName(dock) + ":" : "") + Signature(target);
    if (signature != currentSignature) {
-    Size size = Fit(SizeFor(target));
-    bool growing = size.Width > notch.ActualWidth + 0.5 || size.Height > notch.ActualHeight + 0.5;
+    // The view is built at its size on screen; on a side the shell measures it turned.
+    Size size = Fit(SizeFor(target)), frame = Frame(size);
+    bool growing = frame.Width > notch.ActualWidth + 0.5 || frame.Height > notch.ActualHeight + 0.5;
     bool viewChanged = target != view;
     view = target;
     currentSignature = signature;
     var next = BuildView(target);
     next.Width = size.Width; next.Height = size.Height;
+    next.LayoutTransform = Side ? new RotateTransform(-turn.Angle) : null;
     SwapContent(next, viewChanged);
-    AnimateSize(size, growing);
+    AnimateSize(frame, growing);
    }
    UpdateView();
    UpdateTimers();
@@ -274,7 +310,7 @@ namespace Sonora {
    var previous = current;
    current = next;
    Canvas.SetTop(next, 0);
-   Canvas.SetLeft(next, Math.Round((notch.ActualWidth - next.Width) / 2));
+   Canvas.SetLeft(next, Math.Round((notch.ActualWidth - Along(next)) / 2));
    if (!animate || testing || previous == null) {
     stage.Children.Clear();
     stage.Children.Add(next);
@@ -319,7 +355,7 @@ namespace Sonora {
     if (ticket != sizeGeneration) return;
     sizing = false;
     FitHost(size, false);
-    if (hovering) Peek(true);
+    if (hovering && !floating) Peek(true);
    };
    notch.BeginAnimation(WidthProperty, width);
    notch.BeginAnimation(HeightProperty, new DoubleAnimation(size.Height, duration) { EasingFunction = ease });
@@ -333,7 +369,8 @@ namespace Sonora {
   static double HostWidthFor(double maxNotch) { return Math.Ceiling(maxNotch * 1.1) + 24 + 20; }
 
   void FitHost(Size notchSize, bool overshoot) {
-   if (testing) return;
+   // On the right edge the window keeps its width (Reposition).
+   if (testing || (Side && dock == Dock.Right)) return;
    double h = Math.Ceiling(notchSize.Height * (overshoot ? 1.1 : 1.0)) + 8;
    if (Math.Abs(h - hostHeight) < 1) return;
    hostHeight = h;
@@ -343,7 +380,7 @@ namespace Sonora {
   // Idle and compact states lean out slightly on hover without taking focus.
   void Peek(bool on) {
    if (expanded || sizing || testing || ReduceMotion) return;
-   Size size = Fit(SizeFor(view));
+   Size size = Frame(Fit(SizeFor(view)));
    if (on) size = new Size(size.Width + 14, size.Height + 4);
    var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
    var duration = TimeSpan.FromMilliseconds(180);
@@ -540,17 +577,197 @@ namespace Sonora {
    UpdateView();
   }
 
+  // ---------- docking: the top edge, or the left or right one ----------
+  // On a side the whole shell turns a quarter (its flat side against that edge) and each view
+  // turns back, so the views are the same as on top; only the closed ones have upright versions.
+  // Dragged, the notch comes off as a floating pill; let go, it docks to the nearest edge.
+  Dock dock = Dock.Top;
+  bool floating, dragging;
+  // Physical pixels: where the press was; while floating, the pill's centre and top.
+  int pressX = int.MinValue, pressY, floatX, floatY;
+  DockPreview preview;
+  // The longest a view runs along a side edge (Settings, 308, with room for the spring).
+  const double SideAlong = 340;
+
+  public Dock Docked { get { return dock; } }
+  // Docked on a side (not while it floats under the cursor).
+  bool Side { get { return !floating && dock != Dock.Top; } }
+
+  static Dock ParseDock(string value) { return value == "left" ? Dock.Left : value == "right" ? Dock.Right : Dock.Top; }
+  static string DockName(Dock value) { return value == Dock.Left ? "left" : value == Dock.Right ? "right" : "top"; }
+
+  // A view's size on screen, turned into the shell's own terms: along the edge, then away from it.
+  Size Frame(Size screen) { return Side ? new Size(screen.Height, screen.Width) : screen; }
+  double Along(FrameworkElement element) { return Side ? element.Height : element.Width; }
+
+  // The shell's turn and where it sits in the window, for the current edge.
+  void ApplyDock() {
+   turn.Angle = !Side ? 0 : dock == Dock.Right ? 90 : -90;
+   root.HorizontalAlignment = !Side ? HorizontalAlignment.Center : dock == Dock.Right ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+   root.VerticalAlignment = Side ? VerticalAlignment.Center : VerticalAlignment.Top;
+   earLeft.Visibility = earRight.Visibility = floating ? Visibility.Hidden : Visibility.Visible;
+   currentSignature = null;
+  }
+
+  public bool Moved { get { return dock != Dock.Top || Math.Abs(prefs.NotchCenter - 0.5) > 0.001; } }
+
+  // Back to the middle of the top edge.
+  public void CenterNotch() {
+   prefs.NotchEdge = "top";
+   prefs.NotchCenter = 0.5;
+   prefs.Save();
+   dock = Dock.Top;
+   ApplyDock();
+   hasPlaced = false;
+   Render();
+   Reposition();
+  }
+
+  // Verification only: docks without a drag, so the side views can be rendered.
+  internal void DockForVerification(Dock value) { dock = value; ApplyDock(); hasPlaced = false; Render(); Reposition(); }
+
+  void OnDragPress(object sender, MouseButtonEventArgs e) {
+   pressX = int.MinValue;
+   // A slider's own drag stays the slider's.
+   for (var node = e.OriginalSource as DependencyObject; node != null; node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
+    if (node is System.Windows.Controls.Slider) return;
+   if (testing || hwnd == IntPtr.Zero) return;
+   var cursor = Forms.Cursor.Position;
+   pressX = cursor.X;
+   pressY = cursor.Y;
+  }
+
+  void OnDragMove(object sender, MouseEventArgs e) {
+   if (pressX == int.MinValue || e.LeftButton != MouseButtonState.Pressed) return;
+   var cursor = Forms.Cursor.Position;
+   if (!dragging) {
+    // Past the system's drag distance, so a click with a shaky hand is still a click.
+    double scale = Native.DpiAt(cursor.X, cursor.Y) / 96.0;
+    double moved = Math.Max(Math.Abs(cursor.X - pressX), Math.Abs(cursor.Y - pressY));
+    if (moved < SystemParameters.MinimumHorizontalDragDistance * 2 * scale) return;
+    StartFloating();
+   }
+   Float(cursor);
+  }
+
+  void OnDragRelease(object sender, MouseButtonEventArgs e) {
+   pressX = int.MinValue;
+   if (!dragging) return;
+   EndDrag();
+   e.Handled = true;
+  }
+
+  // Off the edge: closed, a pill with every corner round, under the cursor.
+  void StartFloating() {
+   dragging = true;
+   collapseTimer.Stop();
+   if (expanded) { expanded = false; settingsOpen = false; outsideClicks.Stop(); LeaveKeyboardMode(); }
+   floating = true;
+   ApplyDock();
+   // Taking the mouse from the button under it cancels its click.
+   notch.CaptureMouse();
+   Mouse.OverrideCursor = Cursors.SizeAll;
+   if (preview == null) preview = new DockPreview();
+   Render();
+  }
+
+  // The pill follows the cursor; the edge it would dock to shows where it would land.
+  void Float(System.Drawing.Point cursor) {
+   double scale = Native.DpiAt(cursor.X, cursor.Y) / 96.0;
+   floatX = cursor.X;
+   floatY = cursor.Y - (int)Math.Round(notch.ActualHeight * scale / 2);
+   Reposition();
+   Forms.Screen screen; Dock target; double share;
+   Nearest(cursor, out screen, out target, out share);
+   preview.ShowAt(GhostRect(screen, target, share), target);
+   // The pill stays above its own preview.
+   Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOACTIVATE | 0x0001 | 0x0002);
+  }
+
+  // The edge nearest the cursor on the display it's over, and where along it (a share of the
+  // edge's length; the top's snaps to the middle within 24 px of it).
+  void Nearest(System.Drawing.Point cursor, out Forms.Screen screen, out Dock target, out double share) {
+   screen = Forms.Screen.FromPoint(cursor);
+   var area = screen.WorkingArea;
+   double top = cursor.Y - area.Top, left = cursor.X - area.Left, right = area.Right - cursor.X;
+   target = top <= left && top <= right ? Dock.Top : left <= right ? Dock.Left : Dock.Right;
+   if (target == Dock.Top) {
+    double scale = Native.DpiAt(cursor.X, cursor.Y) / 96.0;
+    double middle = area.Left + area.Width / 2.0;
+    share = Math.Abs(cursor.X - middle) < 24 * scale ? 0.5 : (cursor.X - area.Left) / (double)area.Width;
+   } else {
+    share = (cursor.Y - area.Top) / (double)area.Height;
+   }
+   share = Math.Max(0, Math.Min(1, share));
+  }
+
+  // Where the closed notch would sit at that edge, in physical pixels.
+  Native.RECT GhostRect(Forms.Screen screen, Dock target, double share) {
+   var area = screen.WorkingArea;
+   double scale = Native.DpiAt(area.Left + area.Width / 2, area.Top + area.Height / 2) / 96.0;
+   int along = (int)Math.Round((target == Dock.Top ? 340 : 136) * scale), depth = (int)Math.Round((target == Dock.Top ? 36 : 44) * scale);
+   if (target == Dock.Top) {
+    int center = area.Left + (int)Math.Round(area.Width * share);
+    int x = Math.Max(area.Left, Math.Min(area.Right - along, center - along / 2));
+    return new Native.RECT { Left = x, Top = area.Top, Right = x + along, Bottom = area.Top + depth };
+   }
+   int middle = area.Top + (int)Math.Round(area.Height * share);
+   int y = Math.Max(area.Top, Math.Min(area.Bottom - along, middle - along / 2));
+   int left = target == Dock.Left ? area.Left : area.Right - depth;
+   return new Native.RECT { Left = left, Top = y, Right = left + depth, Bottom = y + along };
+  }
+
+  // Let go: docked to the nearest edge, sliding in from it.
+  void EndDrag() {
+   dragging = false;
+   pressX = int.MinValue;
+   Mouse.OverrideCursor = null;
+   if (notch.IsMouseCaptured) notch.ReleaseMouseCapture();
+   if (preview != null) preview.Hide();
+   if (!floating) return;
+   floating = false;
+   Forms.Screen screen; Dock target; double share;
+   Nearest(Forms.Cursor.Position, out screen, out target, out share);
+   prefs.Display = screen.DeviceName;
+   prefs.NotchEdge = DockName(target);
+   if (target == Dock.Top) prefs.NotchCenter = share; else prefs.NotchSideCenter = share;
+   prefs.Save();
+   dock = target;
+   ApplyDock();
+   hasPlaced = false;
+   Render();
+   Reposition();
+   if (!ReduceMotion) {
+    double depth = Frame(Fit(SizeFor(view))).Height;
+    slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-(depth + 16), 0, TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+   }
+  }
+
   // Positions in physical pixels so per-monitor DPI and mixed-scale setups stay exact. The window
-  // is only moved when its rectangle actually changes.
+  // is only moved when its rectangle actually changes. On top it sits where it was dragged to
+  // across, on a side where it was dragged to up or down, kept far enough from the ends that the
+  // open notch still fits; on the right edge its window keeps the open notch's width, so growing
+  // never moves it (a layered window that moves shows its old picture shifted for a frame).
   public void Reposition() {
    if (hwnd == IntPtr.Zero) return;
    var area = TargetScreen().WorkingArea;
-   double scale = Native.DpiAt(area.Left + area.Width / 2, area.Top + 1) / 96.0;
+   double scale = Native.DpiAt(area.Left + area.Width / 2, area.Top + area.Height / 2) / 96.0;
    double limit = Math.Min(640, Math.Max(300, area.Width / scale - 48));
-   hostWidth = HostWidthFor(limit);
-   double width = testing ? TestWidth : hostWidth, height = testing ? TestHeight : hostHeight;
-   int w = (int)Math.Round(width * scale), h = (int)Math.Round(height * scale);
-   int x = area.Left + (area.Width - w) / 2, y = area.Top;
+   hostWidth = HostWidthFor(Side ? SideAlong : limit);
+   if (Side && dock == Dock.Right) hostHeight = Math.Ceiling(limit * 1.1) + 8;
+   int along = (int)Math.Round((testing ? TestWidth : hostWidth) * scale), depth = (int)Math.Round((testing ? TestHeight : hostHeight) * scale);
+   int x, y, w, h;
+   if (testing || !Side) { w = along; h = depth; } else { w = depth; h = along; }
+   if (floating) {
+    x = floatX - w / 2; y = floatY;
+   } else if (!Side) {
+    int center = area.Left + (int)Math.Round(area.Width * (testing ? 0.5 : prefs.NotchCenter));
+    x = Math.Max(area.Left, Math.Min(area.Right - w, center - w / 2)); y = area.Top;
+   } else {
+    int middle = area.Top + (int)Math.Round(area.Height * (testing ? 0.5 : prefs.NotchSideCenter));
+    y = Math.Max(area.Top, Math.Min(area.Bottom - h, middle - h / 2));
+    x = dock == Dock.Left ? area.Left : area.Right - w;
+   }
    if (!hasPlaced || placed.Left != x || placed.Top != y || placed.Right != x + w || placed.Bottom != y + h) {
     Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, x, y, w, h, Native.SWP_NOACTIVATE);
     placed = new Native.RECT { Left = x, Top = y, Right = x + w, Bottom = y + h };

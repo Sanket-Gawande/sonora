@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.mutableStateOf
 import app.sonora.receiver.net.AudioReceiver
 import app.sonora.receiver.net.PairingLink
@@ -36,6 +37,24 @@ class ReceiverService : Service() {
     private var session: MediaSession? = null
     private var computer = "your PC"
     private val onMedia: () -> Unit = { publishSession() }
+    private val main = Handler(Looper.getMainLooper())
+
+    // A Wi‑Fi stream with no packet for 10 s (the PC sends one every 5 ms, even in silence) is gone:
+    // this phone or the PC left the Wi‑Fi, or the PC slept. It stops, and the home screen says so,
+    // rather than waiting on it.
+    private val watchdog = object : Runnable {
+        override fun run() {
+            val receiver = current ?: return
+            if (overWifi && receiver.quietMs() > LOST_MS) {
+                Log.w("Sonora", "stream: nothing from $computer for ${receiver.quietMs() / 1000} s; stopping")
+                lost.value = computer
+                endOnPc()
+                stopSelf()
+                return
+            }
+            main.postDelayed(this, 1000)
+        }
+    }
 
     // The PC ended this stream (its Disconnect or Quit, or it restarted and lost the key), or
     // couldn't start it: stop too, rather than wait for audio that won't come.
@@ -54,6 +73,7 @@ class ReceiverService : Service() {
         val host = intent.getStringExtra(EXTRA_HOST)
         val port = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
         generation = started
+        Log.i("Sonora", "stream: starting from $computer over ${if (host == LOOPBACK) "USB" else "Wi‑Fi"}")
 
         val notification = notification(computer)
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -85,10 +105,14 @@ class ReceiverService : Service() {
             it.preferred = Outputs.device(this, Outputs.chosen)
             it.start()
         }
+        main.removeCallbacks(watchdog)
+        if (overWifi) main.postDelayed(watchdog, 1000)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        Log.i("Sonora", "stream: stopped")
+        main.removeCallbacks(watchdog)
         endSession()
         if (watching) { PcFinder.unlisten(onPc); PcFinder.release(this) }
         current?.stop()
@@ -195,6 +219,7 @@ class ReceiverService : Service() {
         private const val ACTION_STOP = "app.sonora.receiver.STOP"
         private const val CHANNEL = "playback"
         private const val NOTIFICATION_ID = 1
+        private const val LOST_MS = 10_000L
 
         // The running receiver, for the UI's controls and live stats.
         @Volatile var current: AudioReceiver? = null
@@ -205,9 +230,14 @@ class ReceiverService : Service() {
         private val active = mutableStateOf<PairingLink?>(null)
         val activeLink: PairingLink? get() = active.value
         private var started = 0
+        // The PC a Wi‑Fi stream was lost from, until the next stream or Search again.
+        private val lost = mutableStateOf<String?>(null)
+        val lostFrom: String? get() = lost.value
+        fun clearLost() { lost.value = null }
 
         fun start(context: Context, link: PairingLink) {
             started++
+            lost.value = null
             active.value = link
             context.startForegroundService(
                 Intent(context, ReceiverService::class.java)
@@ -220,6 +250,7 @@ class ReceiverService : Service() {
 
         // The listener's Disconnect, in the app or the notification: ends it on the PC as well.
         fun disconnect(context: Context) {
+            Log.i("Sonora", "stream: Disconnect")
             active.value?.let { PcFinder.end(it.secret) }
             context.stopService(Intent(context, ReceiverService::class.java))
         }

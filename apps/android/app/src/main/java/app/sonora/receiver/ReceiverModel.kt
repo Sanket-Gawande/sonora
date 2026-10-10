@@ -70,13 +70,32 @@ class ReceiverModel {
         PcFinder.phoneId = Trust.phoneId(context)
         PcFinder.hold(this)
         PcFinder.listen(onPc)
+        WifiFinder.onInvite = onInvite
         WifiFinder.start(context)
     }
 
     fun stop() {
+        WifiFinder.onInvite = null
         WifiFinder.stop()
         PcFinder.unlisten(onPc)
         PcFinder.release(this)
+    }
+
+    // The PC's notch asked this phone to connect (its Connect, for this phone): the same as tapping
+    // Connect here, only while the home screen shows and nothing else is under way.
+    private val onInvite: (WifiFinder.Pc) -> Unit = { pc ->
+        val context = app
+        if (context != null && screen == Screen.Nearby && active == null && wifiStep == WifiStep.Idle && !connecting) {
+            Log.i("Sonora", "wifi: ${pc.name} invited this phone")
+            connectWifi(context, pc)
+        }
+    }
+
+    // Search again: after a lost stream, or a search that found nothing.
+    fun searchAgain() {
+        ReceiverService.clearLost()
+        wifiProblem = null
+        WifiFinder.searchAgain()
     }
 
     // Connects to a PC on Wi‑Fi: the channel moves to its address; a PC this phone hasn't paired
@@ -87,6 +106,7 @@ class ReceiverModel {
         app = context.applicationContext
         connectProblem = null
         wifiProblem = null
+        ReceiverService.clearLost()
         wifiTarget = pc
         wifiCode = null
         repaired = false

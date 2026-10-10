@@ -7,8 +7,8 @@ using System.Windows.Threading;
 
 [assembly: AssemblyTitle("Sonora")]
 [assembly: AssemblyProduct("Sonora")]
-[assembly: AssemblyVersion("0.5.0.0")]
-[assembly: AssemblyFileVersion("0.5.0.0")]
+[assembly: AssemblyVersion("0.6.0.0")]
+[assembly: AssemblyFileVersion("0.6.0.0")]
 [assembly: AssemblyDescription("Sonora Windows notch · preview")]
 
 namespace Sonora {

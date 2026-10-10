@@ -223,6 +223,20 @@ namespace Sonora {
      bool silentToJunk;
      try { udp.Client.ReceiveTimeout = 600; udp.Receive(ref from); silentToJunk = false; } catch (SocketException) { silentToJunk = true; }
      check(silentToJunk, "anything but the query gets no answer");
+     // The app's query names it: the PC lists it as nearby, and the notch's Connect invites it.
+     udp.Client.ReceiveTimeout = 2000;
+     var named = Encoding.UTF8.GetBytes("SONORA? v=1&id=" + WifiPhoneId + "&name=Pixel%208%0A");
+     udp.Send(named, named.Length, new IPEndPoint(IPAddress.Loopback, answerPort));
+     string plain = Encoding.UTF8.GetString(udp.Receive(ref from));
+     var near = watcher.Nearby(TimeSpan.FromSeconds(5));
+     check(plain == answer && near.Count == 1 && near[0].Id == WifiPhoneId && near[0].Name == "Pixel 8", "a named query is listed as nearby: " + (near.Count > 0 ? near[0].Name : "none"));
+     watcher.Invite(WifiPhoneId, TimeSpan.FromSeconds(10));
+     udp.Send(named, named.Length, new IPEndPoint(IPAddress.Loopback, answerPort));
+     string invited = Encoding.UTF8.GetString(udp.Receive(ref from));
+     udp.Send(query, query.Length, new IPEndPoint(IPAddress.Loopback, answerPort));
+     string other = Encoding.UTF8.GetString(udp.Receive(ref from));
+     check(invited == answer + "&invite=1" && other == answer, "only the invited phone's answer says invite: " + invited);
+     watcher.Invite(null, TimeSpan.Zero);
     }
     using (var anonymous = new Phone(lanPort)) {
      anonymous.Send("HELLO v=1&model=x");

@@ -56,5 +56,6 @@ class WifiTrustTest {
         assertNull(Presence.answer("SONORA! v=1&name=x&id=nothex&port=47211"))
         assertNull(Presence.answer("SONORA! v=1&name=x&id=00112233aabbccdd&port=0"))
         assertNull(Presence.answer("SONORA? v=1"))
+        assertEquals(Presence.Answer("00112233aabbccdd", "Test PC", 47211, invite = true), Presence.answer("SONORA! v=1&name=Test%20PC&id=00112233aabbccdd&port=47211&invite=1"))
     }
 }

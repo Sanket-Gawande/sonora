@@ -4,6 +4,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -89,6 +90,7 @@ namespace Sonora {
 
   // ---------- idle: a small lip on the screen edge ----------
   FrameworkElement BuildIdle() {
+   if (Side) return BuildIdleSide();
    var dot = new System.Windows.Shapes.Ellipse { Width = 6, Height = 6, Stroke = Ui.Text3, StrokeThickness = 1.3, Margin = new Thickness(8, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
    var row = Stack(Orientation.Horizontal, Ui.Logo(15, Ui.Text3), dot);
    row.HorizontalAlignment = HorizontalAlignment.Center;
@@ -100,6 +102,7 @@ namespace Sonora {
 
   // ---------- compact: what's playing, or the phone link ----------
   FrameworkElement BuildCompact() {
+   if (Side) return BuildCompactSide();
    var grid = Columns(Star, Auto);
    UIElement lead, trailing;
    TextBlock title;
@@ -150,6 +153,65 @@ namespace Sonora {
    grid.Children.Add(Stack(Orientation.Horizontal, lead, Pad(title, 10, 10)));
    grid.Children.Add(At(trailing, 1));
    var button = new Button { Style = Ui.S("SurfaceButton"), Content = grid, HorizontalContentAlignment = HorizontalAlignment.Stretch, ToolTip = "Open Sonora (Ctrl+Alt+S)" };
+   AutomationProperties.SetName(button, "Open Sonora. " + name);
+   button.Click += delegate { Expand(false); };
+   return button;
+  }
+
+  // ---------- closed, on a side edge: the same, stacked upright ----------
+  FrameworkElement BuildIdleSide() {
+   var dot = new System.Windows.Shapes.Ellipse { Width = 6, Height = 6, Stroke = Ui.Text3, StrokeThickness = 1.3, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
+   var column = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+   column.Children.Add(Ui.Logo(15, Ui.Text3));
+   column.Children.Add(dot);
+   var button = new Button { Style = Ui.S("SurfaceButton"), Content = column, ToolTip = "Sonora (Ctrl+Alt+S)" };
+   AutomationProperties.SetName(button, "Open Sonora");
+   button.Click += delegate { Expand(false); };
+   return button;
+  }
+
+  FrameworkElement BuildCompactSide() {
+   var column = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+   string name;
+   if (session.State == LinkState.Pairing || session.State == LinkState.Reconnecting) {
+    bool pairing = session.State == LinkState.Pairing;
+    column.Children.Add(Ui.Icon(pairing ? "qr" : "phone", 16, 1.8, Ui.Text));
+    var spinner = Ui.Spinner(12, pairing ? Ui.Text2 : Ui.Warn);
+    spinner.Margin = new Thickness(0, 12, 0, 0);
+    spinner.HorizontalAlignment = HorizontalAlignment.Center;
+    column.Children.Add(spinner);
+    name = (pairing ? "Pairing with " : "Waiting for ") + session.DeviceName;
+   } else {
+    if (CompactShowsMedia) {
+     compactArt = new ContentControl { Width = 24, Height = 24, Focusable = false, IsTabStop = false, HorizontalAlignment = HorizontalAlignment.Center };
+     column.Children.Add(compactArt);
+     name = "Now playing";
+    } else {
+     column.Children.Add(Ui.Icon("phone", 16, 1.8, Ui.Text));
+     name = "Streaming to " + session.DeviceName;
+    }
+    FrameworkElement level;
+    if (NobodyHears) {
+     level = Ui.Icon("muted", 16, 1.8, Ui.Warn);
+     name += ", but the PC and phone are muted";
+    } else {
+     // The level meter, stood on its side.
+     compactBars = new Bars(7, 18, 2, Ui.Signal);
+     compactBars.LayoutTransform = new RotateTransform(90);
+     level = compactBars;
+    }
+    if (session.IsActive && CompactShowsMedia && !NobodyHears) {
+     var link = Ui.Icon("phone", 13, 1.8, Ui.Live);
+     link.Margin = new Thickness(0, 12, 0, 0);
+     link.HorizontalAlignment = HorizontalAlignment.Center;
+     column.Children.Add(link);
+     name += ", streaming to " + session.DeviceName;
+    }
+    level.Margin = new Thickness(0, 12, 0, 0);
+    level.HorizontalAlignment = HorizontalAlignment.Center;
+    column.Children.Add(level);
+   }
+   var button = new Button { Style = Ui.S("SurfaceButton"), Content = column, ToolTip = "Open Sonora (Ctrl+Alt+S)" };
    AutomationProperties.SetName(button, "Open Sonora. " + name);
    button.Click += delegate { Expand(false); };
    return button;
@@ -271,7 +333,8 @@ namespace Sonora {
   // gear lives here, the one row that's always there.
   FrameworkElement BuildPcRow() {
    var row = DeviceRow();
-   row.Margin = new Thickness(0, 0, 0, 8);
+   // The phone line under it is quieter, and closer.
+   row.Margin = new Thickness(0, 0, 0, PhonePlaying ? 8 : 4);
    bool muted = session.PcMuted;
    row.Children.Add(Ui.DeviceTile("speaker", false, 40));
    var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 12, 0) };
@@ -302,34 +365,66 @@ namespace Sonora {
    switch (session.State) {
     case LinkState.Streaming: return BuildStreamingRow();
     case LinkState.Reconnecting: return BuildWaitingRow();
-    default: return BuildOfflineRow();
+    default: return BuildPhoneLine();
    }
   }
 
-  FrameworkElement BuildOfflineRow() {
-   var row = DeviceRow();
-   row.Children.Add(Ui.DeviceTile("phone", true, 40));
-   // Phones on the Wi-Fi connect from the app; USB is the alternative, offered in full only when a
-   // phone is actually on the cable.
-   bool cable = session.PluggedPhone != null && !session.PluggedWireless;
-   bool ready = session.Problem == null && !session.Busy && !cable && session.WifiReady;
-   string detail = session.Problem ?? (session.Busy ? "Looking for your phone on USB…"
-    : cable ? session.PluggedPhone + " is plugged in. Connect here or from the phone."
-    : session.WifiProblem ?? (session.AllowWifi ? "Open Sonora on your phone." : "Plug in your phone with USB debugging on, or allow Wi-Fi in settings."));
-   if (ready) {
-    var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 12, 0) };
-    text.Children.Add(Ui.T("Play on your phone", 13, FontWeights.SemiBold, Ui.Text));
-    var status = Ui.Status("live", "Ready on Wi-Fi · open Sonora on your phone");
-    ((FrameworkElement)status).Margin = new Thickness(0, 3, 0, 0);
-    text.Children.Add(status);
-    row.Children.Add(At(text, 1));
-   } else {
-    row.Children.Add(At(Heading("Play on your phone", detail, session.Problem != null), 1));
+  // No phone playing: one quiet line under This PC, in the tile's column an icon, then what's
+  // possible, and at most one small button. Whatever can be done first comes first: a phone being
+  // connected, a problem, a phone just lost, a phone on the cable, a phone on this Wi-Fi.
+  FrameworkElement BuildPhoneLine() {
+   bool cable = session.PluggedPhone != null;
+   string where = session.PluggedWireless ? " is on wireless debugging" : " is plugged in";
+   if (session.Busy)
+    return PhoneLine("phone", Ui.Signal, Named(session.PluggedPhone ?? "Your phone", " · connecting over USB…"), Ui.Text2, "Connecting…", null);
+   if (session.Problem != null)
+    return PhoneLine("alert", Ui.Warn, Plain(session.Problem), Ui.Warn, cable ? "Try again" : null, cable ? (Action)session.ConnectUsb : null);
+   if (session.Lost != null)
+    return PhoneLine("alert", Ui.Warn, Named(session.Lost, " · it left the Wi-Fi, so the stream stopped", "Lost "), Ui.Warn, null, null);
+   if (cable)
+    return PhoneLine("usb", Ui.Signal, Named(session.PluggedPhone, where), Ui.Text2, "Connect", session.ConnectUsb);
+   if (session.NearbyPhone != null)
+    return PhoneLine("phone", Ui.Signal, Named(session.NearbyPhone, " is on this Wi-Fi"), Ui.Text2, session.Inviting ? "Connecting…" : "Connect", session.Inviting ? null : (Action)session.ConnectNearby);
+   if (!session.AllowWifi)
+    return PhoneLine("wifi-off", Ui.Text3, Plain("Phones on Wi-Fi are off · plug your phone in, or allow them in settings"), Ui.Text3, null, null);
+   if (session.WifiProblem != null)
+    return PhoneLine("alert", Ui.Warn, Plain(session.WifiProblem), Ui.Warn, null, null);
+   if (!session.NetworkUp)
+    return PhoneLine("wifi-off", Ui.Text3, Plain("This PC isn't on Wi-Fi · plug your phone in to play over USB"), Ui.Text3, null, null);
+   return PhoneLine("phone", Ui.Text3, Plain("No phone connected · open Sonora on your phone to play there"), Ui.Text3, null, null);
+  }
+
+  static Inline[] Plain(string text) { return new Inline[] { new Run(text) }; }
+
+  // "<b>moto g82 5G</b> is on this Wi-Fi": the phone's name stands out, the rest stays quiet.
+  static Inline[] Named(string name, string rest, string before = null) {
+   var bold = new Run(name) { FontWeight = FontWeights.SemiBold, Foreground = Ui.Text };
+   return before == null ? new Inline[] { bold, new Run(rest) } : new Inline[] { new Run(before), bold, new Run(rest) };
+  }
+
+  // `button` without `click` shows disabled (something is under way).
+  FrameworkElement PhoneLine(string icon, Brush iconColor, Inline[] text, Brush textColor, string button, Action click) {
+   var row = Columns(Px(40), Star, Auto);
+   row.Height = 32;
+   var glyph = Ui.Icon(icon, 16, 1.8, iconColor);
+   glyph.HorizontalAlignment = HorizontalAlignment.Center;
+   glyph.VerticalAlignment = VerticalAlignment.Center;
+   row.Children.Add(glyph);
+   var line = new TextBlock { FontSize = 12, Foreground = textColor, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 12, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+   line.Inlines.AddRange(text);
+   var plain = new System.Text.StringBuilder();
+   foreach (var part in text) plain.Append(((Run)part).Text);
+   line.ToolTip = plain.ToString();
+   AutomationProperties.SetName(line, plain.ToString());
+   row.Children.Add(At(line, 1));
+   if (button != null) {
+    var pill = Ui.Pill(button, null, click != null, click);
+    pill.Height = 28;
+    pill.IsEnabled = click != null;
+    pill.VerticalAlignment = VerticalAlignment.Center;
+    pill.Margin = new Thickness(0, 0, 4, 0);
+    row.Children.Add(At(pill, 2));
    }
-   var connect = Ui.Pill(session.Busy ? "Connecting…" : cable ? "Connect over USB" : "Use USB", cable ? "phone" : null, cable, delegate { session.ConnectUsb(); });
-   connect.Height = 30;
-   connect.IsEnabled = !session.Busy;
-   row.Children.Add(Spanning(connect, 4));
    return row;
   }
 
@@ -464,7 +559,7 @@ namespace Sonora {
    header.Margin = new Thickness(-6, 0, 0, 6);
    header.Children.Add(Ui.IconButton("back", "Back (Esc)", "GhostIconButton", 32, CloseSettings));
    header.Children.Add(At(Pad(Ui.T("Settings", 15, FontWeights.SemiBold, Ui.Text), 8, 0), 1));
-   header.Children.Add(At(Ui.T("Sonora 0.5", 11, FontWeights.Normal, Ui.Text3), 2));
+   header.Children.Add(At(Ui.T("Sonora 0.6", 11, FontWeights.Normal, Ui.Text3), 2));
    outer.Children.Add(header);
 
    var body = Columns(Star, Px(28), Star);
@@ -475,7 +570,15 @@ namespace Sonora {
    var displayButton = new Button { Style = Ui.S("Pill"), Height = 30, Padding = new Thickness(12, 0, 8, 0), Content = Stack(Orientation.Horizontal, displayLabel, Pad(Ui.Icon("right", 14, 1.8, Ui.Text2), 4, 0)) };
    AutomationProperties.SetName(displayButton, "Show on display. Activate to switch.");
    displayButton.Click += delegate { CycleDisplay(); };
-   left.Children.Add(SettingRow("Show on", null, displayButton));
+   // Moved along the edge: one click puts it back in the middle.
+   FrameworkElement place = displayButton;
+   if (Moved) {
+    var center = Ui.Pill("Reset", null, false, CenterNotch);
+    center.Height = 30;
+    center.Margin = new Thickness(0, 0, 8, 0);
+    place = Stack(Orientation.Horizontal, center, displayButton);
+   }
+   left.Children.Add(SettingRow("Show on", Moved ? (dock == Dock.Top ? "Moved along the top" : "On the " + DockName(dock) + " edge") : "Drag the notch to move it", place));
    left.Children.Add(SettingRow("Hide over fullscreen apps", "Games, videos, presentations",
     Switch("Hide over fullscreen apps", prefs.HideOverFullscreen, delegate(bool on) { prefs.HideOverFullscreen = on; prefs.Save(); CheckFullscreen(); })));
    int paired = testing ? 0 : session.WifiPhoneCount;
@@ -542,8 +645,8 @@ namespace Sonora {
     prevButton.IsEnabled = now.CanPrevious;
     nextButton.IsEnabled = now.CanNext;
    }
-   if (compactTitle != null && now != null) {
-    compactTitle.Text = now.Title.Length > 0 ? now.Title : now.App;
+   if (compactArt != null && now != null) {
+    if (compactTitle != null) compactTitle.Text = now.Title.Length > 0 ? now.Title : now.App;
     SetArt(compactArt, now.Art, 24, 7);
    }
    UpdateProgress();

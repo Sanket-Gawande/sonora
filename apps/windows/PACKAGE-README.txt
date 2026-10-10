@@ -1,9 +1,9 @@
-SONORA 0.5 - PREVIEW
+SONORA 0.6 - PREVIEW
 Play your Windows PC's audio on your Android phone, over Wi-Fi or a USB cable.
 
 SET UP (ONCE)
 1. Extract this folder anywhere and keep Sonora.exe in it.
-2. On the phone, install Sonora-Android-0.5.apk.
+2. On the phone, install Sonora-Android-0.6.apk.
 3. Run Sonora.exe. Windows asks once whether Sonora may accept connections on your network:
    allow it, so the phone can find this PC on Wi-Fi.
 
@@ -28,6 +28,10 @@ song on the phone. Volume is the phone's own buttons. Latency is measured end to
 ON THE PC
 Sonora sits on the top edge of the screen. Click it, or press Ctrl+Alt+S from any app, to open it.
 Escape or a click anywhere else closes it. It steps aside for fullscreen apps.
+Drag it to move it: let go and it docks to the nearest edge, the top, the left or the right
+(Settings > Show on > Reset puts it back in the middle of the top).
+With no phone playing, the notch shows one quiet line: a phone on this Wi-Fi or on the cable,
+with Connect (it connects while Sonora is open on the phone), or why none can connect.
 The notch shows what's playing (click the song to jump to its app or browser tab), the PC's
 volume and mute, and the phone. If something plays that nobody can hear (the PC and the phone
 both muted), it says so in amber.

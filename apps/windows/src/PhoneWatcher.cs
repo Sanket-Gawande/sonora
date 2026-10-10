@@ -24,6 +24,13 @@ namespace Sonora {
   public static readonly IPAddress DiscoveryGroup = IPAddress.Parse("239.255.47.212");
   const int AdbServerPort = 5037, MaxLanConnections = 16, MaxPerAddress = 4;
 
+  // A phone with the Sonora app open on this network: it asked for this PC with its ID and model.
+  public sealed class NearbyPhone {
+   public string Id, Name;
+   public IPAddress Address;
+   public DateTime Seen;
+  }
+
   public sealed class Phone {
    public string Serial { get; internal set; }
    public string Model { get; internal set; }
@@ -66,6 +73,10 @@ namespace Sonora {
   // nobody on the network can keep the notch popping up.
   public TimeSpan PairCooldown = TimeSpan.FromSeconds(30);
   readonly Dictionary<IPAddress, DateTime> cooling = new Dictionary<IPAddress, DateTime>();
+  // Phones that asked for this PC lately, by ID; and the one invited to connect, until when.
+  readonly Dictionary<string, NearbyPhone> nearby = new Dictionary<string, NearbyPhone>();
+  string invited;
+  DateTime invitedUntil;
   volatile Status status = new Status();
   volatile MediaState media = new MediaState();
   volatile bool running = true;
@@ -147,8 +158,8 @@ namespace Sonora {
   public int LanPort { get { var l = lan; return l == null ? 0 : l.Port; } }
   public int AnswerPort { get { var d = discovery; return d == null ? 0 : ((IPEndPoint)d.Client.LocalEndPoint).Port; } }
 
-  // "SONORA? v=1" from the app, broadcast on the Wi-Fi: this PC's name, ID and port, straight back.
-  // On every IPv4 interface, and again whenever the addresses change (a new Wi-Fi, a cable).
+  // "SONORA? v=1&id=…&name=…" from the app, broadcast on the Wi-Fi: this PC's name, ID and port,
+  // straight back, plus "&invite=1" for the phone the notch asked to connect. On every IPv4 interface, and again whenever the addresses change (a new Wi-Fi, a cable).
   void JoinGroup() {
    var udp = discovery;
    if (udp == null) return;
@@ -174,9 +185,61 @@ namespace Sonora {
     if (data.Length > 256) continue;
     string query = Encoding.UTF8.GetString(data);
     if (!query.StartsWith("SONORA? ") || Control.Value(query, "v") != "1") continue;
-    var reply = Encoding.UTF8.GetBytes("SONORA! v=1&name=" + Uri.EscapeDataString(computer) + "&id=" + pcId + "&port=" + LanPort);
+    string id = Control.Value(query, "id");
+    bool invite = false;
+    if (id != null && PhoneId.IsMatch(id)) {
+     lock (nearby) {
+      nearby[id] = new NearbyPhone { Id = id, Name = PhoneName(Control.Value(query, "name")), Address = from.Address, Seen = DateTime.UtcNow };
+      invite = id == invited && DateTime.UtcNow < invitedUntil;
+     }
+    }
+    var reply = Encoding.UTF8.GetBytes("SONORA! v=1&name=" + Uri.EscapeDataString(computer) + "&id=" + pcId + "&port=" + LanPort + (invite ? "&invite=1" : ""));
     try { udp.Send(reply, reply.Length, from); } catch (SocketException) { } catch (ObjectDisposedException) { return; }
    }
+  }
+
+  // The model a phone gives, as the notch may show it: decoded, printable, at most 40 characters.
+  static string PhoneName(string escaped) {
+   string name;
+   try { name = Uri.UnescapeDataString(escaped ?? ""); } catch (UriFormatException) { name = ""; }
+   var clean = new StringBuilder();
+   foreach (char c in name) if (!char.IsControl(c) && clean.Length < 40) clean.Append(c);
+   string result = clean.ToString().Trim();
+   return result.Length == 0 ? "A phone" : result;
+  }
+
+  // Phones that asked for this PC within `within`, the latest first.
+  public List<NearbyPhone> Nearby(TimeSpan within) {
+   var list = new List<NearbyPhone>();
+   lock (nearby) foreach (var phone in nearby.Values) if (DateTime.UtcNow - phone.Seen < within) list.Add(phone);
+   list.Sort(delegate(NearbyPhone a, NearbyPhone b) { return b.Seen.CompareTo(a.Seen); });
+   return list;
+  }
+
+  // The next answers to that phone's app say "&invite=1", and the app, open on screen, connects
+  // as if its Connect was tapped: it still pairs or proves its key as always. Null withdraws it.
+  public void Invite(string phoneId, TimeSpan forHowLong) {
+   lock (nearby) { invited = phoneId; invitedUntil = DateTime.UtcNow + forHowLong; }
+  }
+
+  void Withdraw(string phoneId) { lock (nearby) if (invited == phoneId) invited = null; }
+
+  // Whether this PC is on a network a phone could share: an interface that's up, with an IPv4
+  // address and a gateway (a Wi-Fi, a cable, a phone's hotspot; not a virtual switch on its own).
+  public static bool OnNetwork() {
+   try {
+    foreach (var nic in NetworkInterface.GetAllNetworkInterfaces()) {
+     if (nic.OperationalStatus != OperationalStatus.Up) continue;
+     if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback || nic.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+     var ip = nic.GetIPProperties();
+     bool v4 = false;
+     foreach (var address in ip.UnicastAddresses) if (address.Address.AddressFamily == AddressFamily.InterNetwork) v4 = true;
+     if (!v4) continue;
+     foreach (var gateway in ip.GatewayAddresses)
+      if (gateway.Address.AddressFamily == AddressFamily.InterNetwork && !gateway.Address.Equals(IPAddress.Any)) return true;
+    }
+   } catch (NetworkInformationException) { }
+   return false;
   }
 
   public static string WifiSerial(string phoneId) { return "wifi-" + phoneId; }
@@ -577,6 +640,8 @@ namespace Sonora {
    // the PC. A few tries per connection at most.
    void Pair(string key) {
     if (!lan || !greeted || pairing || pairings >= 3 || owner.CoolingDown(remote)) return;
+    // An invitation is used up once the phone acts on it, whatever the user answers.
+    owner.Withdraw(phoneId);
     byte[] phonePublic = WifiTrust.FromBase64Url(key), pcPublic, longTerm;
     try { longTerm = WifiTrust.Agree(phonePublic, out pcPublic); }
     catch (CryptographicException) { return; }
@@ -613,6 +678,7 @@ namespace Sonora {
     var keys = owner.WifiKey;
     byte[] longTerm = keys == null ? null : keys(phoneId);
     bool ok = longTerm != null && WifiTrust.CheckJoin(longTerm, challenge, nonce, udp, proof);
+    owner.Withdraw(phoneId);
     lock (writing) {
      try { Write(ok ? "JOINED ok=1&proof=" + WifiTrust.JoinedProof(longTerm, challenge, nonce) : "JOINED ok=0"); }
      catch (IOException) { Close(); return; }

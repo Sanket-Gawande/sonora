@@ -119,6 +119,33 @@ namespace Sonora {
    session.ShowPcMutedForVerification(false);
    session.ShowWifiForVerification(false);
 
+   // No phone playing: one quiet line under This PC, for each case it can show.
+   session.ShowForVerification(LinkState.Offline, null, null);
+   session.ShowPhoneLineForVerification(null, null, true);
+   Expect(notch.View == NotchView.Home, "offline home");
+   Snap(notch, directory, "16-home-no-phone");
+   session.ShowPhoneLineForVerification("moto g82 5G", null, true);
+   Snap(notch, directory, "17-home-phone-nearby");
+   session.ShowPhoneLineForVerification(null, "moto g82 5G", true);
+   Snap(notch, directory, "18-home-phone-lost");
+   session.ShowPhoneLineForVerification(null, null, false);
+   Snap(notch, directory, "19-home-no-network");
+   session.ShowPhoneLineForVerification(null, null, true);
+
+   // Docked to the right edge: the closed tab stands upright, the open notch comes out sideways.
+   notch.DockForVerification(Dock.Right);
+   notch.Collapse();
+   notch.PushTestLevel(0.7);
+   Expect(notch.View == NotchView.Compact, "right edge: compact");
+   Snap(notch, directory, "20-right-compact");
+   notch.Expand(false);
+   Snap(notch, directory, "21-right-home");
+   notch.DockForVerification(Dock.Left);
+   notch.Collapse();
+   Snap(notch, directory, "22-left-compact");
+   notch.DockForVerification(Dock.Top);
+   notch.Expand(false);
+
    session.Disconnect();
    Expect(session.State == LinkState.Offline, "disconnect");
    notch.HideNotch();
@@ -126,7 +153,7 @@ namespace Sonora {
    notch.ShowNotch();
    Expect(notch.IsVisible, "show");
 
-   report.AppendLine("PASS states: idle, home (nothing playing, playing, streaming, waiting), compact (playing, streaming), pairing, Wi-Fi approval, Wi-Fi streaming, settings, mute/volume, disconnect, hide/show.");
+   report.AppendLine("PASS states: idle, home (nothing playing, playing, streaming, waiting), compact (playing, streaming), pairing, Wi-Fi approval, Wi-Fi streaming, phone line (none, nearby, lost, no network), right and left edges, settings, mute/volume, disconnect, hide/show.");
    report.AppendLine("Snapshots written to " + directory);
    File.WriteAllText(Path.Combine(directory, "verification.txt"), report.ToString(), Encoding.UTF8);
    notch.Close();

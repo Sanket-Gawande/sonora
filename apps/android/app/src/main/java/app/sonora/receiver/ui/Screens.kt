@@ -8,6 +8,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -176,9 +177,9 @@ private fun Card(modifier: Modifier = Modifier, content: @Composable () -> Unit)
 private fun Label(text: String) = Text(text, style = text(12, FontWeight.SemiBold, Sonora.Text3, 0.06f))
 
 @Composable
-private fun DeviceTile(icon: ImageVector, size: Dp = 44.dp) {
+private fun DeviceTile(icon: ImageVector, size: Dp = 44.dp, tint: Color = Sonora.Text) {
     Box(Modifier.size(size).clip(RoundedCornerShape(size * 0.32f)).background(Sonora.Card2), contentAlignment = Alignment.Center) {
-        Glyph(icon, size / 2)
+        Glyph(icon, size / 2, tint)
     }
 }
 
@@ -211,6 +212,11 @@ private fun NearbyScreen(receiver: ReceiverModel) {
     // there only. (While the channel itself is on Wi‑Fi, there's no adb PC to show.)
     val pc = PcFinder.pc?.takeIf { found -> !PcFinder.overWifi && (usb.cable || wifi.none { it.id == found.id }) }
     val active = receiver.active
+    // Nothing to connect to yet: a lost stream, the search, or why there's no search.
+    val lost = ReceiverService.lostFrom
+    val search = WifiFinder.search
+    val nothing = active == null && pc == null && wifi.isEmpty()
+    var showUsb by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Glyph(Icons.Logo, 22.dp, Sonora.Signal)
@@ -229,7 +235,10 @@ private fun NearbyScreen(receiver: ReceiverModel) {
                 active != null -> "Your PC’s audio plays here, even when you leave the app."
                 pc != null -> "Sonora is open on ${pc.name}. Connect to hear it on this phone."
                 wifi.isNotEmpty() -> "Sonora is open on this Wi‑Fi. Connect to hear your PC on this phone."
-                else -> "Open Sonora on your PC. It shows up here by itself, on this Wi‑Fi or over a USB cable."
+                lost != null -> "The stream stopped. Nothing plays until you connect again."
+                search == WifiFinder.Search.NoNetwork -> "This phone isn’t on Wi‑Fi, and its hotspot is off. Sonora isn’t searching."
+                search == WifiFinder.Search.Stopped -> "Sonora isn’t open on a PC on this Wi‑Fi."
+                else -> "Open Sonora on your PC. It shows up here by itself."
             },
             style = text(15, color = Sonora.Text2).copy(lineHeight = text(15).fontSize * 1.45f),
         )
@@ -245,8 +254,20 @@ private fun NearbyScreen(receiver: ReceiverModel) {
                 if (pc != null && wifi.isEmpty()) AvailableCard(pc, cable = usb.cable, connecting = receiver.connecting, problem = receiver.connectProblem ?: pc.problem)
                 if (wifi.isNotEmpty()) WifiCard(wifi, receiver, buttons = wifi.size > 1)
                 if (pc != null && wifi.isNotEmpty()) UsbLine(receiver.connecting, receiver.connectProblem ?: pc.problem) { receiver.connect() }
-                if (pc == null && wifi.isEmpty()) FindingCard(usb)
+                if (nothing) {
+                    when {
+                        lost != null -> LostCard(lost, offline = search == WifiFinder.Search.NoNetwork)
+                        search == WifiFinder.Search.NoNetwork -> NoWifiCard()
+                        search == WifiFinder.Search.Stopped -> NotFoundCard(receiver.wifiProblem?.second)
+                        else -> SearchingCard(WifiFinder.onWifi)
+                    }
+                    if (showUsb) UsbCard(usb)
+                }
             }
+        }
+        if (nothing) {
+            Spacer(Modifier.height(14.dp))
+            UsbHow(open = showUsb) { showUsb = !showUsb }
         }
         Spacer(Modifier.height(16.dp))
         val connectingWifi = receiver.wifiTarget != null
@@ -254,9 +275,18 @@ private fun NearbyScreen(receiver: ReceiverModel) {
             active != null -> PrimaryButton("Open player") { receiver.openActive() }
             wifi.size == 1 -> PrimaryButton(if (connectingWifi) "Connecting…" else "Connect over Wi‑Fi", Icons.Pc, busy = connectingWifi) { receiver.connectWifi(context, wifi[0]) }
             pc != null && wifi.isEmpty() -> PrimaryButton(if (receiver.connecting) "Connecting…" else "Connect", Icons.Pc, busy = receiver.connecting) { receiver.connect() }
-            wifi.isEmpty() && !usb.debugging -> PrimaryButton("Open developer options") { openDeveloperOptions(context) }
+            !nothing -> {}
+            search == WifiFinder.Search.NoNetwork -> PrimaryButton("Open Wi‑Fi settings") { openWifiSettings(context) }
+            search == WifiFinder.Search.Stopped -> PrimaryButton("Search again") { receiver.searchAgain() }
+            lost != null -> PrimaryButton("Searching…", busy = true) {}
         }
     }
+}
+
+private fun openWifiSettings(context: Context) {
+    // The Wi‑Fi panel over the app where there is one; the hotspot is a tap away from it.
+    val panel = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_WIFI) else Intent(Settings.ACTION_WIFI_SETTINGS)
+    runCatching { context.startActivity(panel) }.onFailure { context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS)) }
 }
 
 private fun openDeveloperOptions(context: Context) {
@@ -406,21 +436,128 @@ private fun SmallButton(label: String, enabled: Boolean = true, onClick: () -> U
     ) { Text(label, style = text(14, FontWeight.SemiBold, Sonora.Ink)) }
 }
 
-// No PC yet: what the phone can check for itself, ticked off as it happens.
+// The card for each reason there's nothing to connect to: its label and chip, an icon, and why.
 @Composable
-private fun FindingCard(usb: UsbStatus) {
-    val pulse by rememberInfiniteTransition(label = "finding").animateFloat(
+private fun StateCard(label: String, chip: @Composable () -> Unit, icon: ImageVector, tint: Color, title: String, detail: String, more: @Composable () -> Unit = {}) {
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label(label)
+            Spacer(Modifier.weight(1f))
+            chip()
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
+            DeviceTile(icon, tint = tint)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = text(16, FontWeight.SemiBold))
+                Text(detail, style = text(13, color = Sonora.Text2).copy(lineHeight = text(13).fontSize * 1.4f), modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+        more()
+    }
+}
+
+// Asking on the network now; it stops by itself after 15 s.
+@Composable
+private fun SearchingCard(onWifi: Boolean) {
+    val pulse by rememberInfiniteTransition(label = "searching").animateFloat(
         initialValue = 0.25f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
         label = "pulse",
     )
-    Card {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Label("LOOKING FOR YOUR PC")
-            Spacer(Modifier.weight(1f))
-            Box(Modifier.size(8.dp).alpha(pulse).clip(CircleShape).background(Sonora.Signal))
+    StateCard(
+        if (onWifi) "ON THIS WI‑FI" else "ON THIS PHONE’S HOTSPOT",
+        chip = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
+                Box(Modifier.size(8.dp).alpha(pulse).clip(CircleShape).background(Sonora.Signal))
+                Spacer(Modifier.width(6.dp))
+                Text("Searching", style = text(12, FontWeight.SemiBold, Sonora.Signal))
+            }
+        },
+        icon = Icons.Wifi, tint = Sonora.Text,
+        title = "Looking for your PC…",
+        detail = (if (onWifi) "On this phone’s Wi‑Fi." else "On this phone’s hotspot.") + " Stops after 15 seconds.",
+    )
+}
+
+@Composable
+private fun NotFoundCard(problem: String?) {
+    StateCard(
+        "ON THIS WI‑FI", chip = { Chip("Stopped", live = false) }, icon = Icons.Pc, tint = Sonora.Text3,
+        title = "No PC found", detail = problem ?: "Searched this Wi‑Fi for 15 seconds.",
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Sonora.Line))
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Open Sonora on your PC.", "Put both on the same Wi‑Fi, or the PC on this phone’s hotspot.").forEachIndexed { i, tip ->
+                Row {
+                    Text("${i + 1}", style = text(13, color = Sonora.Text3), modifier = Modifier.width(18.dp))
+                    Text(tip, style = text(13, color = Sonora.Text2).copy(lineHeight = text(13).fontSize * 1.4f))
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun NoWifiCard() {
+    StateCard(
+        "NOT ON WI‑FI", chip = { Chip("Off", live = false) }, icon = Icons.WifiOff, tint = Sonora.Text3,
+        title = "Turn on Wi‑Fi or your hotspot", detail = "Sonora starts looking as soon as you’re on one.",
+    )
+}
+
+// A Wi‑Fi stream that went quiet and was stopped (ReceiverService).
+@Composable
+private fun LostCard(name: String, offline: Boolean) {
+    StateCard(
+        "DISCONNECTED",
+        chip = {
+            Text(
+                "Lost",
+                style = text(12, FontWeight.SemiBold, Sonora.Ink),
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Sonora.Warn).padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        },
+        icon = Icons.Alert, tint = Sonora.Warn,
+        title = "Lost $name",
+        detail = if (offline) "This phone left the Wi‑Fi." else "$name stopped answering on this Wi‑Fi.",
+    )
+}
+
+// USB, the quieter way: one line, its steps behind How.
+@Composable
+private fun UsbHow(open: Boolean, toggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .border(1.dp, Sonora.Line, RoundedCornerShape(18.dp))
+            .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph(Icons.Usb, 18.dp, Sonora.Text3)
+        Spacer(Modifier.width(12.dp))
+        Text("Or use a USB cable", style = text(13, color = Sonora.Text2), modifier = Modifier.weight(1f))
+        Box(
+            Modifier
+                .height(44.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable(role = Role.Button, onClickLabel = if (open) "Hide the USB steps" else "Show the USB steps", onClick = toggle)
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) { Text(if (open) "Hide" else "How", style = text(13, FontWeight.SemiBold, Sonora.Signal)) }
+    }
+}
+
+// The USB steps, ticked off as the phone sees them happen.
+@Composable
+private fun UsbCard(usb: UsbStatus) {
+    val context = LocalContext.current
+    Card {
+        Label("OVER USB")
         Spacer(Modifier.height(16.dp))
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Step(
@@ -438,6 +575,10 @@ private fun FindingCard(usb: UsbStatus) {
                 title = "Open Sonora on your PC",
                 detail = "It finds this phone by itself. Still nothing? Unplug and plug in again, then tap Allow on the phone.",
             )
+        }
+        if (!usb.debugging) {
+            Spacer(Modifier.height(14.dp))
+            SmallButton("Open developer options") { openDeveloperOptions(context) }
         }
     }
 }

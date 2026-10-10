@@ -48,8 +48,9 @@ object Presence {
         }
     }
 
-    // A PC's answer to the Wi‑Fi query (WifiFinder): "SONORA! v=1&name=…&id=<16 hex>&port=<n>".
-    data class Answer(val id: String, val name: String, val port: Int)
+    // A PC's answer to the Wi‑Fi query (WifiFinder): "SONORA! v=1&name=…&id=<16 hex>&port=<n>",
+    // plus "&invite=1" when Connect was clicked for this phone in the PC's notch.
+    data class Answer(val id: String, val name: String, val port: Int, val invite: Boolean = false)
 
     private val pcId = Regex("^[0-9a-f]{16}$")
 
@@ -59,7 +60,7 @@ object Presence {
         if (f["v"] != "1") return null
         val id = f["id"]?.takeIf { pcId.matches(it) } ?: return null
         val port = f["port"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
-        return Answer(id, f["name"]?.takeIf { it.isNotBlank() }?.take(60) ?: "PC", port)
+        return Answer(id, f["name"]?.takeIf { it.isNotBlank() }?.take(60) ?: "PC", port, f["invite"] == "1")
     }
 
     // "LINK request=…&url=…" (or "&none=1"): the request it answers, and the link if the PC had one

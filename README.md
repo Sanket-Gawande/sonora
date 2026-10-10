@@ -75,7 +75,7 @@ Audio is sealed with AES‑256 and HMAC‑SHA256. On Wi‑Fi the phone pairs onc
 <td valign="top">
 
 **🪟 A notch that stays out of the way**<br>
-Opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, shows the PC's volume and the phone, jumps to the tab that's playing, and warns when nobody can hear it.
+Opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, shows the PC's volume and the phone, jumps to the tab that's playing, and warns when nobody can hear it. In the way? Drag it to the left or right edge.
 
 </td>
 </tr>
@@ -90,8 +90,8 @@ Opens with a click or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>, shows the PC'
 
 | | Download | You need |
 |---|---|---|
-| **Windows** | [`Sonora-Windows-0.5.zip`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.5.0/Sonora-Windows-0.5.zip) | Windows 10 or 11 |
-| **Android** | [`Sonora-Android-0.5.apk`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.5.0/Sonora-Android-0.5.apk) | Android 8.0 or later |
+| **Windows** | [`Sonora-Windows-0.6.zip`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.6.0/Sonora-Windows-0.6.zip) | Windows 10 or 11 |
+| **Android** | [`Sonora-Android-0.6.apk`](https://github.com/Sanket-Gawande/sonora/releases/download/v0.6.0/Sonora-Android-0.6.apk) | Android 8.0 or later |
 
 1. **Windows:** extract the zip anywhere and run `Sonora.exe`. Windows asks once whether Sonora may accept connections on your network: allow it.
 2. **Android:** install the APK and open Sonora. Your PC shows up when both are on the same Wi‑Fi (or the PC is on the phone's hotspot).
@@ -142,6 +142,8 @@ Sonora captures the PC's output as it's mixed, cuts it into 5 ms encrypted packe
 | Wi‑Fi discovery, pairing and streaming | ✅ Working |
 | PC volume in the notch, Mute PC from the phone, "nobody hears this" warning | ✅ Working |
 | Open the song on the phone, jump to the playing tab on the PC | ✅ Working |
+| Drag the notch to the top, left or right edge | ✅ Working |
+| Connect a phone from the notch; both apps stop searching and give up on a lost stream | ✅ Working |
 
 ## Coming next
 

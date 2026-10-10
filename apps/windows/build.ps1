@@ -57,5 +57,5 @@ if ($Verify) {
     if ($process.ExitCode -ne 0) { throw ('Verification failed. See ' + (Join-Path $env:LOCALAPPDATA 'Sonora\error.log')) }
     Get-Content (Join-Path $verification 'verification.txt')
 }
-Compress-Archive -Path $package -DestinationPath (Join-Path $buildRoot 'Sonora-Windows-0.5.zip') -Force
+Compress-Archive -Path $package -DestinationPath (Join-Path $buildRoot 'Sonora-Windows-0.6.zip') -Force
 Write-Output ('Built: ' + (Join-Path $package 'Sonora.exe'))

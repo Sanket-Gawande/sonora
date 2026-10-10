@@ -44,6 +44,7 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
     else JitterBuffer(PACKET_BYTES, targetDepth = 5, maxDepth = 40, floor = 3, ceiling = 20)
     // UDP has no connection: "connected" there means a packet arrived in the last 1.5 s.
     @Volatile private var lastPacket = 0L
+    @Volatile private var startedAt = 0L
     @Volatile private var running = false
     @Volatile private var connected = false
     // The output picked in the player (null: Android decides), and the one Android really plays on.
@@ -61,7 +62,12 @@ class AudioReceiver(secret: ByteArray, private val host: String?, private val po
 
     fun stats() = Stats(if (host == null) SystemClock.elapsedRealtime() - lastPacket < 1500 else connected, received, audible, rejected, jitter.played, jitter.concealed, jitter.late, jitter.depth * PACKET_MS)
 
+    // How long since the last packet (or since the start, before the first). The PC sends one every
+    // 5 ms even in silence, so a few seconds of nothing means the connection is gone.
+    fun quietMs(): Long = SystemClock.elapsedRealtime() - maxOf(lastPacket, startedAt)
+
     fun start() {
+        startedAt = SystemClock.elapsedRealtime()
         running = true
         thread(name = "Sonora receive", isDaemon = true) { if (host == null) receiveUdp() else receiveTcp(host) }
         thread(name = "Sonora playback", isDaemon = true, priority = Thread.MAX_PRIORITY) { play() }
